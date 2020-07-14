@@ -20,6 +20,16 @@ vor.kappa_P = 0.1
 # import time
 #
 vor.triangulate_periodic(vor.x0)
+
+k = 0
+for Tri in TRI:
+    j = 0
+    for TRi in vor.tris:
+        if np.all(np.unique(Tri) - np.unique(TRi)==0):
+            j +=1
+    if j == 0:
+        print("NO",k)
+    k+=1
 #
 #
 # t0 = time.time()
