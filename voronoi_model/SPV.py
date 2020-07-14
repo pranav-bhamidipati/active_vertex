@@ -1,4 +1,4 @@
-from voronoi_model_periodic import *
+from voronoi_model.voronoi_model_periodic import *
 import numpy as np
 import triangle as tr
 import matplotlib.pyplot as plt
@@ -17,24 +17,24 @@ vor.eta = 0#0.01
 vor.kappa_A = 0.1
 vor.kappa_P = 0.1
 
-import time
-
-vor.triangulate_periodic(vor.x0)
-
-
-t0 = time.time()
-for i in range(int(1e4)):
-    vor.triangulate_periodic(vor.x0)
-t1 = time.time()
-print("1e4 iterations in",t1-t0,"s")
-
-# vor.set_t_span(0.05,80)
-# # vor.run_simulation_profile()
-# vor.simulate_periodic()
-# vor.check_forces(vor.x,vor.F)
-# vor.x_save = np.mod(vor.x_save + vor.L/2,vor.L)
-# vor.check_forces(np.mod(vor.x+vor.L/2,vor.L),vor.F)
-# print(vor.M.shape)
-# vor.animate(n_frames=50)
+# import time
 #
+vor.triangulate_periodic(vor.x0)
+#
+#
+# t0 = time.time()
+# for i in range(int(1e4)):
+#     vor.triangulate_periodic(vor.x0)
+# t1 = time.time()
+# print("1e4 iterations in",t1-t0,"s")
+
+vor.set_t_span(0.05,20)
+# vor.run_simulation_profile()
+vor.simulate_periodic()
+vor.check_forces(vor.x,vor.F)
+vor.x_save = np.mod(vor.x_save + vor.L/2,vor.L)
+vor.check_forces(np.mod(vor.x+vor.L/2,vor.L),vor.F)
+print(vor.M.shape)
+vor.animate(n_frames=50)
+
 # %timeit

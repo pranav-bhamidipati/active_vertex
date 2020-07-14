@@ -266,6 +266,72 @@ class Tissue:
             self.neighbours = V[n_neigh]
 
 
+        def tri_angles(self,x,tri):
+
+            L = self.L
+            three = np.arange(3).astype(int)
+            i_b = np.mod(three+1,3)
+            i_c = np.mod(three+2,3)
+
+            C = x[tri]
+            a2 = (np.mod(C[:,i_b,0]-C[:,i_c,0]+L/2,L)-L/2)**2 + (np.mod(C[:,i_b,1]-C[:,i_c,1]+L/2,L)-L/2)**2
+            b2 = (np.mod(C[:,:,0]-C[:,i_c,0]+L/2,L)-L/2)**2 + (np.mod(C[:,:,1]-C[:,i_c,1]+L/2,L)-L/2)**2
+            c2 = (np.mod(C[:,i_b,0]-C[:,:,0]+L/2,L)-L/2)**2 + (np.mod(C[:,i_b,1]-C[:,:,1]+L/2,L)-L/2)**2
+
+            cos_Angles = (b2+c2-a2)/(2*np.sqrt(b2)*np.sqrt(c2))
+            Angles = np.arccos(cos_Angles)
+            return Angles
+
+        def equiangulate(self,x,tri,v_neighbours):
+
+            self = vor
+            x = vor.x0
+            tri = vor.tris
+            v_neighbours = vor.v_neighbours
+            x+= np.random.normal(0,0.2,x.shape)
+            L = self.L
+            three = np.arange(3).astype(np.int32)
+            nv = tri.shape[0]
+            no_flips = False
+            # while no_flips is False:
+            Angles = self.tri_angles(x,tri)
+            flipped = 0
+            for i in range(nv):
+                TRI = tri[i]
+                neigh = v_neighbours[i]
+                for k,neighbour in enumerate(neigh):
+                    if neighbour > i:
+                        k2 = np.mod(np.inner(tri[neighbour] == TRI[np.mod(k+1,3)],three)+1,3)
+                        theta = Angles[TRI[k],k] + Angles[tri[neighbour,k2],k2]
+                        if theta > np.pi:
+                            print("flip",i,k)
+                            flipped+=1
+                            tri2 = tri.copy()
+                            v_neighbours2 = v_neighbours.copy()
+                            tri2[i,np.mod(k+2,3)] = tri[neighbour,k2] #check there's not dodgy copying issues here
+                            tri2[neighbour,np.mod(k2+2,3)] = tri[i,k]
+                            i_n_neighbours = v_neighbours[neighbour,np.mod(k2+1,3)],v_neighbours[i,k],v_neighbours[i,np.mod(k+2,3)]
+                            neighbour_n_neighbours = v_neighbours[i,np.mod(k+1,3)],v_neighbours[neighbour,k2],v_neighbours[neighbour,np.mod(k2+2,3)]
+
+                            v_neighbours2[i] = np.roll(i_n_neighbours,k)
+                            v_neighbours2[neighbour] = np.roll(neighbour_n_neighbours,k2)
+
+                            cell_F = v_neighbours2[neighbour,k2]
+                            F_i_neighbour = np.inner(v_neighbours2[cell_F] == i, three)
+                            if np.nonzero(v_neighbours2[cell_F] == i)[0].size!=1:
+                                print("ERROR 1")
+                            # if sum(v_neighbours[cell_F] == i):
+                            #     print("ERRORR")
+                            v_neighbours2[cell_F,F_i_neighbour] = neighbour
+
+                            cell_D = v_neighbours2[i,k]
+                            D_i_neighbour = np.inner(v_neighbours2[cell_D] == neighbour, three)
+                            if np.nonzero(v_neighbours2[cell_D] == neighbour)[0].size!=1:
+                                print("ERROR 2")
+                            # if sum(v_neighbours[cell_D] == i):
+                            #     print("ERRORR")
+                            v_neighbours2[cell_D,D_i_neighbour] = i
+                no_flips = flipped==0
 
         def get_P_periodic(self,neighbours, vs):
             """
