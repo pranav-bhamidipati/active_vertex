@@ -290,72 +290,26 @@ class Tissue:
             v_neighbours = vor.v_neighbours
             x+= np.random.normal(0,0.2,x.shape)
             L = self.L
+
             three = np.arange(3).astype(np.int32)
             nv = tri.shape[0]
             no_flips = False
             Angles = self.tri_angles(x, tri)
             while no_flips is False:
                 flipped = 0
-                # for i in range(nv):
-                i = 0
-                while (i < nv) and (no_flips is False):
-                    TRI = tri[i]
-                    k = 0
-                    # for k in range(3):
-                    while (k < 3) and (no_flips is False):
+                for i in range(nv):
+                    for k in range(3):
                         neighbour = v_neighbours[i,k]
                         if neighbour > i:
-                            k2_alt = np.mod(np.inner(tri[neighbour] == tri[i,np.mod(k+1,3)],three)+1,3)
                             k2 = np.inner(v_neighbours[neighbour]==i,three)
-                            if k2!=k2_alt:
-                                print("nonsame")
-                                no_flips=True
-                                break
-                            theta = Angles[TRI[k],k] + Angles[tri[neighbour,k2],k2]
+                            theta = Angles[i,k] + Angles[neighbour,k2]
                             if theta > np.pi:
-                                print("flip",i,k)
                                 flipped+=1
                                 tri[i,np.mod(k+2,3)] = tri[neighbour,k2]
                                 tri[neighbour,np.mod(k2+2,3)] = tri[i,k]
-                                if np.unique(tri[i]).size!=3:
-                                    print("duplicate i")
-                                    no_flips=True
-                                if np.unique(tri[neighbour]).size!=3:
-                                    print("duplicate neigh")
-                                    no_flips=True
-
                                 v_neighbours = get_neighbours_j(tri, v_neighbours, [i,neighbour])
                                 Angles[[i,neighbour]] = self.tri_angles(x,tri[[i,neighbour]])
-                                # i_n_neighbours = v_neighbours[neighbour,np.mod(k2+1,3)],v_neighbours[i,k],v_neighbours[i,np.mod(k+2,3)]
-                                # neighbour_n_neighbours = v_neighbours[i,np.mod(k+1,3)],v_neighbours[neighbour,k2],v_neighbours[neighbour,np.mod(k2+2,3)]
-                                #
-                                # v_neighbours[i] = np.roll(i_n_neighbours,k)
-                                # v_neighbours[neighbour] = np.roll(neighbour_n_neighbours,k2)
-                                #
-                                # cell_F = v_neighbours[neighbour,k2]
-                                # F_i_neighbour = np.inner(v_neighbours[cell_F] == i, three)
-                                # if np.nonzero(v_neighbours[cell_F] == i)[0].size!=1:
-                                #     print("ERROR 1")
-                                #     no_flips = True
-                                #
-                                # # if sum(v_neighbours[cell_F] == i):
-                                # #     print("ERRORR")
-                                # v_neighbours[cell_F,F_i_neighbour] = neighbour
-                                #
-                                # cell_D = v_neighbours[i,k]
-                                # if np.nonzero(v_neighbours[cell_D] == neighbour)[0].size!=1:
-                                #     print("ERROR 2")
-                                #     no_flips = True
-                                #
-                                # D_i_neighbour = np.inner(v_neighbours[cell_D] == neighbour, three)
-                                #
-                                # # if sum(v_neighbours[cell_D] == i):
-                                # #     print("ERRORR")
-                                # v_neighbours[cell_D,D_i_neighbour] = i
-                        k +=1
-                    i+=1
-                no_flips += flipped==0
-                print(flipped)
+                no_flips = flipped==0
 
         def get_P_periodic(self,neighbours, vs):
             """
