@@ -7,7 +7,10 @@ from scipy.spatial import Voronoi, voronoi_plot_2d
 import os
 from matplotlib import animation
 from line_profiler import LineProfiler
-
+import math
+from matplotlib.patches import Polygon
+from matplotlib.collections import PatchCollection
+from matplotlib import cm
 
 
 class Cell:
@@ -101,7 +104,8 @@ class Tissue:
             self.x = self.x0
             self.n_c = self.x0.shape[0]
 
-        def set_interaction(self,W = 0.16*np.array([[2, 0.5], [0.5, 2]]),nE = 45):
+        def set_interaction(self,W = 0.16*np.array([[2, 0.5], [0.5, 2]]),pE = 0.5):
+            nE = int(self.n_c*pE)
             N_dict = {"E": nE, "T": self.n_c - nE}
 
             c_types = np.zeros(self.n_c, dtype=np.int32)
@@ -274,20 +278,34 @@ class Tissue:
             grid_x[0, 0], grid_x[1, 1] = grid_x[1, 1], grid_x[0, 0]
             grid_y[0, 0], grid_y[1, 1] = grid_y[1, 1], grid_y[0, 0]
             y = np.vstack([x + np.array([i * L, j * L]) for i, j in np.array([grid_x.ravel(), grid_y.ravel()]).T])
-            Vor = Voronoi(y)
-            voronoi_plot_2d(Vor, ax=ax)
-            # regions, vertices = self.voronoi_finite_polygons_2d(Voronoi(y))
-            # for region in regions:
-            #     polygon = vertices[region]
-            #     plt.fill(*zip(*polygon), alpha=0.4,color="grey")
+
+            c_types_print = np.tile(self.c_types,9)
+            bleed = 0.1
+            c_types_print = c_types_print[(y<L*(1+bleed)).all(axis=1)+(y>-L*bleed).all(axis=1)]
+            y = y[(y<L*(1+bleed)).all(axis=1)+(y>-L*bleed).all(axis=1)]
+            # Vor = Voronoi(y)
+            # voronoi_plot_2d(Vor, ax=ax)
+            regions, vertices = self.voronoi_finite_polygons_2d(Voronoi(y))
+
 
             ax.set(aspect=1,xlim=(0,self.L),ylim=(0,self.L))
             if type(self.c_types) is list:
-                ax.scatter(x[:, 0], x[:, 1],color="grey",zorder=1000)
+                # ax.scatter(x[:, 0], x[:, 1],color="grey",zorder=1000)
+                for region in regions:
+                    polygon = vertices[region]
+                    plt.fill(*zip(*polygon), alpha=0.4, color="grey")
+
             else:
                 cols = "red","blue"
                 for j,i in enumerate(np.unique(self.c_types)):
                     ax.scatter(x[self.c_types==i, 0], x[self.c_types==i, 1],color=cols[i],zorder=1000)
+                patches = []
+                for i, region in enumerate(regions):
+                    patches.append(Polygon(vertices[region], True,facecolor=cols[c_types_print[i]],edgecolor="white",alpha=0.5))
+
+                p = PatchCollection(patches, match_original=True)
+                # p.set_array(c_types_print)
+                ax.add_collection(p)
 
 
         def remove_repeats(self,tri):
@@ -340,6 +358,11 @@ class Tissue:
             grid_x[0,0],grid_x[1,1] = grid_x[1,1],grid_x[0,0]
             grid_y[0,0],grid_y[1,1] = grid_y[1,1],grid_y[0,0]
             y = np.vstack([x + np.array([i*L,j*L]) for i,j in np.array([grid_x.ravel(),grid_y.ravel()]).T])
+
+            # #1b. Reduce excess grid for efficiency.
+            # self.bleed = 0.5
+            # y = y[(y<L*(1+self.bleed)).all(axis=1)+(y>-L*self.bleed).all(axis=1)]
+
 
             #2. Perform the triangulation on y
             #   The **triangle** package (tr) returns a dictionary, containing the triangulation.
@@ -592,7 +615,7 @@ class Tissue:
                 ax1.set(aspect=1, xlim=(0, self.L), ylim=(0, self.L))
 
             Writer = animation.writers['ffmpeg']
-            writer = Writer(fps=20, bitrate=1800)
+            writer = Writer(fps=15, bitrate=1800)
             if file_name is None:
                 file_name = "animation %d" % time.time()
             an = animation.FuncAnimation(fig, animate, frames=n_frames, interval=200)

@@ -15,7 +15,7 @@ vor.x0 = np.remainder(vor.x0+shift,vor.L)
 vor.A0 = 0.86
 vor.P0 = 3.12
 print(vor.P0/np.sqrt(vor.A0))
-vor.eta = 5e-3#0.01#25
+vor.eta = 1e-2#0.01#25
 vor.kappa_A = 0.2
 vor.kappa_P = 0.1
 
@@ -67,7 +67,7 @@ vor.triangulate_periodic(vor.x0)
 # # t1 = time.time()
 # # print("1e4 iterations in",t1-t0,"s")
 
-vor.set_t_span(0.05,80)
+vor.set_t_span(0.05,200)
 # vor.run_simulation_profile()
 vor.simulate_periodic()
 vor.check_forces(vor.x,vor.F)
@@ -80,6 +80,6 @@ ax.set(xlabel="Time",ylabel="Fraction of self-self interactions")
 fig.savefig("self_self.pdf")
 
 print(vor.M.shape)
-vor.animate(n_frames=50)
+vor.animate(n_frames=30)
 
 # %timeit
