@@ -44,6 +44,9 @@ class Tissue:
             self.kappa_A = 1
             self.kappa_P = 1
 
+            self.J = []
+            self.c_types = []
+
         def generate_cells(self,n_c):
             """
             Generate the cells.
@@ -97,6 +100,23 @@ class Tissue:
             self.x0 = self.x0[self.x0.max(axis=1) < L*0.95]
             self.x = self.x0
             self.n_c = self.x0.shape[0]
+
+        def set_interaction(self,W = 0.16*np.array([[2, 0.5], [0.5, 2]]),nE = 45):
+            N_dict = {"E": nE, "T": self.n_c - nE}
+
+            c_types = np.zeros(self.n_c, dtype=np.int32)
+            j = 0
+            for k, c_type in enumerate(N_dict):
+                j1 = N_dict[c_type]
+                c_types[j:j + j1] = k
+                j += j1
+            np.random.shuffle(c_types)
+
+            cell_i, cell_j = np.meshgrid(c_types, c_types, indexing="ij")
+            J = W[cell_i, cell_j]
+            self.J = J
+            self.c_types = c_types
+
 
         def get_vertex_periodic(self,centroids, tri):
             """
@@ -155,6 +175,89 @@ class Tissue:
             ax.quiver(x[:, 0], x[:, 1], F[:, 0], F[:, 1])
             fig.show()
 
+        def voronoi_finite_polygons_2d(self, vor, radius=None):
+            """
+            Reconstruct infinite voronoi regions in a 2D diagram to finite
+            regions.
+
+            Parameters
+            ----------
+            vor : Voronoi
+                Input diagram
+            radius : float, optional
+                Distance to 'points at infinity'.
+
+            Returns
+            -------
+            regions : list of tuples
+                Indices of vertices in each revised Voronoi regions.
+            vertices : list of tuples
+                Coordinates for revised Voronoi vertices. Same as coordinates
+                of input vertices, with 'points at infinity' appended to the
+                end.
+
+            """
+
+            if vor.points.shape[1] != 2:
+                raise ValueError("Requires 2D input")
+
+            new_regions = []
+            new_vertices = vor.vertices.tolist()
+
+            center = vor.points.mean(axis=0)
+            if radius is None:
+                radius = vor.points.ptp().max()
+
+            # Construct a map containing all ridges for a given point
+            all_ridges = {}
+            for (p1, p2), (v1, v2) in zip(vor.ridge_points, vor.ridge_vertices):
+                all_ridges.setdefault(p1, []).append((p2, v1, v2))
+                all_ridges.setdefault(p2, []).append((p1, v1, v2))
+
+            # Reconstruct infinite regions
+            for p1, region in enumerate(vor.point_region):
+                vertices = vor.regions[region]
+
+                if all(v >= 0 for v in vertices):
+                    # finite region
+                    new_regions.append(vertices)
+                    continue
+
+                # reconstruct a non-finite region
+                ridges = all_ridges[p1]
+                new_region = [v for v in vertices if v >= 0]
+
+                for p2, v1, v2 in ridges:
+                    if v2 < 0:
+                        v1, v2 = v2, v1
+                    if v1 >= 0:
+                        # finite ridge: already in the region
+                        continue
+
+                    # Compute the missing endpoint of an infinite ridge
+
+                    t = vor.points[p2] - vor.points[p1]  # tangent
+                    t /= np.linalg.norm(t)
+                    n = np.array([-t[1], t[0]])  # normal
+
+                    midpoint = vor.points[[p1, p2]].mean(axis=0)
+                    direction = np.sign(np.dot(midpoint - center, n)) * n
+                    far_point = vor.vertices[v2] + direction * radius
+
+                    new_region.append(len(new_vertices))
+                    new_vertices.append(far_point.tolist())
+
+                # sort region counterclockwise
+                vs = np.asarray([new_vertices[v] for v in new_region])
+                c = vs.mean(axis=0)
+                angles = np.arctan2(vs[:, 1] - c[1], vs[:, 0] - c[0])
+                new_region = np.array(new_region)[np.argsort(angles)]
+
+                # finish
+                new_regions.append(new_region.tolist())
+
+            return new_regions, np.asarray(new_vertices)
+
 
         def plot_vor(self,x,ax):
             """
@@ -173,8 +276,19 @@ class Tissue:
             y = np.vstack([x + np.array([i * L, j * L]) for i, j in np.array([grid_x.ravel(), grid_y.ravel()]).T])
             Vor = Voronoi(y)
             voronoi_plot_2d(Vor, ax=ax)
+            # regions, vertices = self.voronoi_finite_polygons_2d(Voronoi(y))
+            # for region in regions:
+            #     polygon = vertices[region]
+            #     plt.fill(*zip(*polygon), alpha=0.4,color="grey")
+
             ax.set(aspect=1,xlim=(0,self.L),ylim=(0,self.L))
-            ax.scatter(x[:, 0], x[:, 1],color="grey")
+            if type(self.c_types) is list:
+                ax.scatter(x[:, 0], x[:, 1],color="grey",zorder=1000)
+            else:
+                cols = "red","blue"
+                for j,i in enumerate(np.unique(self.c_types)):
+                    ax.scatter(x[self.c_types==i, 0], x[self.c_types==i, 1],color=cols[i],zorder=1000)
+
 
         def remove_repeats(self,tri):
             """
@@ -381,7 +495,7 @@ class Tissue:
             ## 2. Calculate the area and perimeter vector terms within eq. A8,
             # zet1 = (h3y - h7y,h3x-h7x) {line 2}
             # zet2 = (h2x-h7x/ ...) {line 3}
-            zet1 = (np.flip(np.remainder(h_CCW - h_CW + self.L/2,self.L) - self.L/2,axis=2)*np.array([1,-1])) #unsure about this line -- seems to be non-buggy with and without the additional multiplication. Multiplication is invoking the cross product w e_z
+            zet1 = (np.flip(np.remainder(h_CCW - h_CW + self.L/2,self.L) - self.L/2,axis=2))#*np.array([1,-1])) #unsure about this line -- seems to be non-buggy with and without the additional multiplication. Multiplication is invoking the cross product w e_z
             zet2a = np.remainder(h - h_CW + self.L/2,self.L) - self.L/2
             zet2b = np.remainder(h - h_CCW + self.L/2,self.L) - self.L/2
             zet2a_norm, zet2b_norm = np.sqrt((zet2a**2).sum(axis=2)),np.sqrt((zet2b**2).sum(axis=2))
@@ -390,10 +504,12 @@ class Tissue:
                 zet2[:,:,i] = zet2a[:,:,i]/zet2a_norm + zet2b[:,:,i]/zet2b_norm
             zet2 = zet2
 
-            # J_CCW = self.J[self.tris, np.roll(self.tris, 1, axis=-1)]
-            # J_CW = self.J[self.tris, np.roll(self.tris, -1, axis=-1)]
-            #
-            # zet3 = self.J_CCW*zet2a[:,:,i]/zet2a_norm + self.J_CW*zet2b[:,:,i]/zet2b_norm
+            J_CCW = self.J[self.tris, np.roll(self.tris, 1, axis=-1)]
+            J_CW = self.J[self.tris, np.roll(self.tris, -1, axis=-1)]
+
+            zet3 = np.empty(zet1.shape)
+            for i in range(2):
+                zet3[:,:,i] = J_CW*zet2a[:,:,i]/zet2a_norm + J_CCW*zet2b[:,:,i]/zet2b_norm
 
             ## 3. Find areas and perimeters of the cells and restructure data wrt. the triangulation
             vA = self.A[self.tris]
@@ -408,7 +524,7 @@ class Tissue:
             #   This is essentially decomposing the chain rule of the expression of F for each cell by vertex
             #   M_sum is a (nv,2,3) matrix. This is the force contribution for each cell of a given triangle/vertex (3rd dim). Considering {x,y} components (2nd dim)
             #       Within the function, this calculates (direct and indirect) contributions of each cell wrt each other cell (i.e. 3x3), then adds them together
-            M_sum = make_M(DHDR,self.n_v,self.kappa_A,self.kappa_P,vA,vP,self.A0,self.P0,zet1,zet2)
+            M_sum = make_M(DHDR,self.n_v,self.kappa_A,self.kappa_P,vA,vP,self.A0,self.P0,zet1,zet2,zet3)
             self.M = M_sum
 
             #6. Compile force components wrt. cells by using the cell-to-vertex connection matrix.
@@ -418,12 +534,15 @@ class Tissue:
 
         def simulate_periodic(self):
             n_t = self.t_span.size
+            self.n_t = n_t
             x = self.x0.copy()
             self.x = x.copy()
             self.x_save = np.zeros((n_t,self.n_c,2))
+            self.tri_save = np.zeros((n_t,self.tris.shape[0],3),dtype=np.int32)
             for i in range(n_t):
                 print(i)
                 self.triangulate_periodic(x)
+                self.tri_save[i] = self.tris
                 self.assign_vertices()
                 self.get_A_periodic(self.neighbours,self.vs)
                 self.get_P_periodic(self.neighbours,self.vs)
@@ -434,6 +553,14 @@ class Tissue:
                 self.x = x
                 self.x_save[i] = x
             return self.x_save
+
+        def get_self_self(self):
+            self.self_self = np.zeros(self.n_t)
+            for i, tri in enumerate(self.tri_save):
+                C_types = self.c_types[tri]
+                C_self_self = (C_types-np.roll(C_types,1,axis=1))==0
+                self.self_self[i] = np.sum(C_self_self)/C_self_self.size
+
 
 
         def animate(self,n_frames = 100,file_name=None, dir_name="plots"):
@@ -607,13 +734,13 @@ def circumcenter_periodic(C,L):
 
 
 @jit(nopython=True,cache=True)
-def make_M(DHDR,n_v,kappa_A,kappa_P,vA,vP,A0,P0,zet1,zet2):
+def make_M(DHDR,n_v,kappa_A,kappa_P,vA,vP,A0,P0,zet1,zet2,zet3):
     M = np.zeros((2, n_v, 2, 3))
     for i in range(3):
         for j in range(3):
             for Fdim in range(2):
                 M[:, :, Fdim, i] += DHDR[:, i, Fdim].T * (kappa_A * (vA[:, j] - A0) * zet1[:, j].T +
-                                                            2 * kappa_P * (vP[:, j] - P0) * zet2[:, j].T)
+                                                            2 * kappa_P * (vP[:, j]-P0) * zet2[:, j].T + zet3[:,j].T)
     M_out = M[0] + M[1]
     return M_out
 
