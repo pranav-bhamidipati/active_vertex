@@ -21,22 +21,48 @@ vor.kappa_P = 0.1
 #
 vor.triangulate_periodic(vor.x0)
 
-k = 0
-for Tri in TRI:
-    j = 0
-    for TRi in vor.tris:
-        if np.all(np.unique(Tri) - np.unique(TRi)==0):
-            j +=1
-    if j == 0:
-        print("NO",k)
-    k+=1
+# vor.x0 += np.random.normal(0,0.2,vor.x0.shape)
+# tri,v_neighbours = vor.equiangulate(vor.x0,vor.tris,vor.v_neighbours)
+# TRI = tri.copy()
+# vor.triangulate_periodic(vor.x0)
 #
+self = vor
+W = np.array([[2.0,1.0],[1.0,2.0]])
+nE = 45
+N_dict = {"E":nE,"T":self.n_c-nE}
+
+c_types = np.zeros(self.n_c,dtype=np.int32)
+j = 0
+for k,c_type in enumerate(N_dict):
+    j1 = N_dict[c_type]
+    c_types[j:j+j1] = k
+    j += j1
+
+cell_i,cell_j = np.meshgrid(c_types,c_types,indexing="ij")
+J = W[cell_i,cell_j]
+
+tri = self.tris
+J_CCW = J[tri,np.roll(tri,1,axis=-1)]
+J_CW = J[tri,np.roll(tri,-1,axis=-1)]
+
+
 #
-# t0 = time.time()
-# for i in range(int(1e4)):
-#     vor.triangulate_periodic(vor.x0)
-# t1 = time.time()
-# print("1e4 iterations in",t1-t0,"s")
+# k = 0
+# for Tri in TRI:
+#     j = 0
+#     for TRi in vor.tris:
+#         if np.all(np.unique(Tri) - np.unique(TRi)==0):
+#             j +=1
+#     if j == 0:
+#         print("NO",k)
+#     k+=1
+# #
+# #
+# # t0 = time.time()
+# # for i in range(int(1e4)):
+# #     vor.triangulate_periodic(vor.x0)
+# # t1 = time.time()
+# # print("1e4 iterations in",t1-t0,"s")
 
 vor.set_t_span(0.05,20)
 # vor.run_simulation_profile()

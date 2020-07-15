@@ -267,49 +267,43 @@ class Tissue:
 
 
         def tri_angles(self,x,tri):
-
-            L = self.L
-            three = np.arange(3).astype(int)
-            i_b = np.mod(three+1,3)
-            i_c = np.mod(three+2,3)
-
-            C = x[tri]
-            a2 = (np.mod(C[:,i_b,0]-C[:,i_c,0]+L/2,L)-L/2)**2 + (np.mod(C[:,i_b,1]-C[:,i_c,1]+L/2,L)-L/2)**2
-            b2 = (np.mod(C[:,:,0]-C[:,i_c,0]+L/2,L)-L/2)**2 + (np.mod(C[:,:,1]-C[:,i_c,1]+L/2,L)-L/2)**2
-            c2 = (np.mod(C[:,i_b,0]-C[:,:,0]+L/2,L)-L/2)**2 + (np.mod(C[:,i_b,1]-C[:,:,1]+L/2,L)-L/2)**2
-
-            cos_Angles = (b2+c2-a2)/(2*np.sqrt(b2)*np.sqrt(c2))
-            Angles = np.arccos(cos_Angles)
-            return Angles
+            return tri_angles(x, tri,self.L)
+            #
+            # L = self.L
+            # three = np.arange(3).astype(int)
+            # i_b = np.mod(three+1,3)
+            # i_c = np.mod(three+2,3)
+            #
+            # C = x[tri]
+            # a2 = (np.mod(C[:,i_b,0]-C[:,i_c,0]+L/2,L)-L/2)**2 + (np.mod(C[:,i_b,1]-C[:,i_c,1]+L/2,L)-L/2)**2
+            # b2 = (np.mod(C[:,:,0]-C[:,i_c,0]+L/2,L)-L/2)**2 + (np.mod(C[:,:,1]-C[:,i_c,1]+L/2,L)-L/2)**2
+            # c2 = (np.mod(C[:,i_b,0]-C[:,:,0]+L/2,L)-L/2)**2 + (np.mod(C[:,i_b,1]-C[:,:,1]+L/2,L)-L/2)**2
+            #
+            # cos_Angles = (b2+c2-a2)/(2*np.sqrt(b2)*np.sqrt(c2))
+            # Angles = np.arccos(cos_Angles)
+            # return Angles
 
         def equiangulate(self,x,tri,v_neighbours):
-
-            self = vor
-            x = vor.x0
-            tri = vor.tris
-            v_neighbours = vor.v_neighbours
-            x+= np.random.normal(0,0.2,x.shape)
-            L = self.L
-
-            three = np.arange(3).astype(np.int32)
-            nv = tri.shape[0]
-            no_flips = False
-            Angles = self.tri_angles(x, tri)
-            while no_flips is False:
-                flipped = 0
-                for i in range(nv):
-                    for k in range(3):
-                        neighbour = v_neighbours[i,k]
-                        if neighbour > i:
-                            k2 = np.inner(v_neighbours[neighbour]==i,three)
-                            theta = Angles[i,k] + Angles[neighbour,k2]
-                            if theta > np.pi:
-                                flipped+=1
-                                tri[i,np.mod(k+2,3)] = tri[neighbour,k2]
-                                tri[neighbour,np.mod(k2+2,3)] = tri[i,k]
-                                v_neighbours = get_neighbours_j(tri, v_neighbours, [i,neighbour])
-                                Angles[[i,neighbour]] = self.tri_angles(x,tri[[i,neighbour]])
-                no_flips = flipped==0
+            return equiangulate(x, tri, v_neighbours, self.L)
+            # three = np.arange(3).astype(np.int32)
+            # nv = tri.shape[0]
+            # no_flips = False
+            # Angles = self.tri_angles(x, tri)
+            # while no_flips is False:
+            #     flipped = 0
+            #     for i in range(nv):
+            #         for k in range(3):
+            #             neighbour = v_neighbours[i,k]
+            #             if neighbour > i:
+            #                 k2 = np.inner(v_neighbours[neighbour]==i,three)
+            #                 theta = Angles[i,k] + Angles[neighbour,k2]
+            #                 if theta > np.pi:
+            #                     flipped+=1
+            #                     tri[i,np.mod(k+2,3)] = tri[neighbour,k2]
+            #                     tri[neighbour,np.mod(k2+2,3)] = tri[i,k]
+            #                     v_neighbours = get_neighbours_j(tri, v_neighbours, [i,neighbour])
+            #                     Angles[[i,neighbour]] = self.tri_angles(x,tri[[i,neighbour]])
+            #     no_flips = flipped==0
 
         def get_P_periodic(self,neighbours, vs):
             """
@@ -378,8 +372,10 @@ class Tissue:
             h = np.empty((self.n_v,3,2))
             for i in range(3):
                 h[:,i] = vs
-            h_CCW = np.roll(neighbours, -1, axis=1)
-            h_CW = np.roll(neighbours, +1, axis=1)
+            h_CCW = np.roll(neighbours, 1, axis=1)
+            h_CW = np.roll(neighbours, -1, axis=1)
+            # h_CCW = np.roll(neighbours, 0, axis=1)
+            # h_CW = np.roll(neighbours, 2, axis=1)
 
 
             ## 2. Calculate the area and perimeter vector terms within eq. A8,
@@ -393,6 +389,11 @@ class Tissue:
             for i in range(2):
                 zet2[:,:,i] = zet2a[:,:,i]/zet2a_norm + zet2b[:,:,i]/zet2b_norm
             zet2 = zet2
+
+            # J_CCW = self.J[self.tris, np.roll(self.tris, 1, axis=-1)]
+            # J_CW = self.J[self.tris, np.roll(self.tris, -1, axis=-1)]
+            #
+            # zet3 = self.J_CCW*zet2a[:,:,i]/zet2a_norm + self.J_CW*zet2b[:,:,i]/zet2b_norm
 
             ## 3. Find areas and perimeters of the cells and restructure data wrt. the triangulation
             vA = self.A[self.tris]
@@ -546,7 +547,7 @@ def get_neighbours(tri,neigh=None):
                 neigh[neighb,np.mod(2-l,3)] = j
     return neigh
 
-
+@jit(nopython=True,cache=True)
 def get_neighbours_j(tri,neigh,js):
     tri_compare = np.concatenate((tri.T, tri.T)).T.reshape((-1, 3, 2))
     for j in js:
@@ -639,3 +640,53 @@ def np_apply_along_axis(func1d, axis, arr):
         for i in range(len(result)):
             result[i] = func1d(arr[i, :])
     return result
+
+@jit(nopython=True,cache=True)
+def tri_angles(x, tri,L):
+    three = np.array([0,1,2])
+    i_b = np.mod(three + 1, 3)
+    i_c = np.mod(three + 2, 3)
+
+    C = np.empty((x.shape[0],3,2))
+    for i, TRI in enumerate(tri):
+        C[i] = x[TRI]
+    a2 = (np.mod(C[:, i_b, 0] - C[:, i_c, 0] + L / 2, L) - L / 2) ** 2 + (
+                np.mod(C[:, i_b, 1] - C[:, i_c, 1] + L / 2, L) - L / 2) ** 2
+    b2 = (np.mod(C[:, :, 0] - C[:, i_c, 0] + L / 2, L) - L / 2) ** 2 + (
+                np.mod(C[:, :, 1] - C[:, i_c, 1] + L / 2, L) - L / 2) ** 2
+    c2 = (np.mod(C[:, i_b, 0] - C[:, :, 0] + L / 2, L) - L / 2) ** 2 + (
+                np.mod(C[:, i_b, 1] - C[:, :, 1] + L / 2, L) - L / 2) ** 2
+
+    cos_Angles = (b2 + c2 - a2) / (2 * np.sqrt(b2) * np.sqrt(c2))
+    Angles = np.arccos(cos_Angles)
+    return Angles
+
+
+@jit(nopython=True,cache=True)
+def equiangulate(x, tri, v_neighbours,L):
+    three = np.array([0,1,2])
+    nv = tri.shape[0]
+    no_flips = False
+    Angles = tri_angles(x, tri,L)
+    while no_flips is False:
+        flipped = 0
+        for i in range(nv):
+            for k in range(3):
+                neighbour = v_neighbours[i, k]
+                if neighbour > i:
+                    k2 = ((v_neighbours[neighbour] == i)* three).sum()
+                    theta = Angles[i, k] + Angles[neighbour, k2]
+                    if theta > np.pi:
+                        flipped += 1
+                        tri[i, np.mod(k + 2, 3)] = tri[neighbour, k2]
+                        tri[neighbour, np.mod(k2 + 2, 3)] = tri[i, k]
+                        v_neighbours = get_neighbours_j(tri, v_neighbours, [i, neighbour])
+                        new_tris = np.empty((2,3),dtype=np.int32)
+                        new_tris[0],new_tris[1] = tri[i],tri[neighbour]
+                        new_angles = tri_angles(x, new_tris,L)
+                        Angles[i] = new_angles[0]
+                        Angles[neighbour] = new_angles[1]
+        no_flips = flipped == 0
+    return tri,v_neighbours
+
+
