@@ -50,6 +50,8 @@ class Tissue:
             self.J = []
             self.c_types = []
 
+            self.k2s = []
+
         def generate_cells(self,n_c):
             """
             Generate the cells.
@@ -330,10 +332,16 @@ class Tissue:
             row_mask = np.append([True], np.any(np.diff(sorted_tri, axis=0), 1))
             return sorted_tri[row_mask]
 
-
-
-
         def triangulate_periodic(self,x):
+            Angles = tri_angles(x, self.tris, self.L)
+            if type(self.k2s) is list:
+                self.k2s = get_k2(self.tris, self.v_neighbours)
+                self._triangulate_periodic(x)
+            elif not ((Angles[self.v_neighbours, self.k2s] + Angles) < np.pi).all():
+                self.k2s = get_k2(self.tris, self.v_neighbours)
+                self._triangulate_periodic(x)
+
+        def _triangulate_periodic(self,x):
             """
             Calculates the periodic triangulation on the set of points x.
 
@@ -518,7 +526,7 @@ class Tissue:
             ## 2. Calculate the area and perimeter vector terms within eq. A8,
             # zet1 = (h3y - h7y,h3x-h7x) {line 2}
             # zet2 = (h2x-h7x/ ...) {line 3}
-            zet1 = (np.flip(np.remainder(h_CCW - h_CW + self.L/2,self.L) - self.L/2,axis=2))#*np.array([1,-1])) #unsure about this line -- seems to be non-buggy with and without the additional multiplication. Multiplication is invoking the cross product w e_z
+            zet1 = (np.flip(np.remainder(h_CCW - h_CW + self.L/2,self.L) - self.L/2,axis=2))
             zet2a = np.remainder(h - h_CW + self.L/2,self.L) - self.L/2
             zet2b = np.remainder(h - h_CCW + self.L/2,self.L) - self.L/2
             zet2a_norm, zet2b_norm = np.sqrt((zet2a**2).sum(axis=2)),np.sqrt((zet2b**2).sum(axis=2))
@@ -797,7 +805,7 @@ def tri_angles(x, tri,L):
     i_b = np.mod(three + 1, 3)
     i_c = np.mod(three + 2, 3)
 
-    C = np.empty((x.shape[0],3,2))
+    C = np.empty((tri.shape[0],3,2))
     for i, TRI in enumerate(tri):
         C[i] = x[TRI]
     a2 = (np.mod(C[:, i_b, 0] - C[:, i_c, 0] + L / 2, L) - L / 2) ** 2 + (
@@ -840,3 +848,38 @@ def equiangulate(x, tri, v_neighbours,L):
     return tri,v_neighbours
 
 
+@jit(nopython=True,cache=True)
+def equiangulate2(x, tri, v_neighbours,L):
+    three = np.array([0,1,2])
+    nv = tri.shape[0]
+    no_flips = False
+    Angles = tri_angles(x, tri,L)
+    while no_flips is False:
+        flipped = 0
+        for i in range(nv):
+            for k in range(3):
+                neighbour = v_neighbours[i, k]
+                if neighbour > i:
+                    k2 = ((v_neighbours[neighbour] == i)* three).sum()
+                    theta = Angles[i, k] + Angles[neighbour, k2]
+                    if theta > np.pi:
+                        flipped += 1
+                        tri[i, np.mod(k + 2, 3)] = tri[neighbour, k2]
+                        tri[neighbour, np.mod(k2 + 2, 3)] = tri[i, k]
+                        v_neighbours = get_neighbours(tri)
+        no_flips = flipped == 0
+    return tri,v_neighbours
+
+
+
+@jit(nopython=True,cache=True)
+def get_k2(tri, v_neighbours):
+    three = np.array([0, 1, 2])
+    nv = tri.shape[0]
+    k2s = np.empty((nv, 3), dtype=np.int32)
+    for i in range(nv):
+        for k in range(3):
+            neighbour = v_neighbours[i, k]
+            k2 = ((v_neighbours[neighbour] == i) * three).sum()
+            k2s[i, k] = k2
+    return k2s
