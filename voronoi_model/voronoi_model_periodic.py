@@ -57,6 +57,9 @@ class Tissue:
             self.grid_y[0,0],self.grid_y[1,1] = self.grid_y[1,1],self.grid_y[0,0]
             self.grid_xy = np.array([self.grid_x.ravel(),self.grid_y.ravel()]).T
 
+            self.x_save = []
+            self.tri_save = []
+
         def generate_cells(self,n_c):
             """
             Generate the cells.

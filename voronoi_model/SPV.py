@@ -9,7 +9,7 @@ vor.set_interaction(W = 0.16*np.array([[2, 0.5], [0.5, 2]]))
 
 vor.A0 = 0.86
 vor.P0 = 3.12
-vor.eta = 1e-2
+vor.eta = 1e-3
 vor.kappa_A = 0.2
 vor.kappa_P = 0.2
 
