@@ -52,6 +52,10 @@ class Tissue:
 
             self.k2s = []
 
+            self.grid_x,self.grid_y = np.mgrid[-1:2,-1:2]
+            self.grid_x[0,0],self.grid_x[1,1] = self.grid_x[1,1],self.grid_x[0,0]
+            self.grid_y[0,0],self.grid_y[1,1] = self.grid_y[1,1],self.grid_y[0,0]
+            self.grid_xy = np.array([self.grid_x.ravel(),self.grid_y.ravel()]).T
         def generate_cells(self,n_c):
             """
             Generate the cells.
@@ -101,7 +105,7 @@ class Tissue:
             :param L: Domain size/length (np.float32)
             """
             self.L = L
-            self.x0 = self.hexagonal_lattice(int(np.sqrt(3*self.n_c)),int(np.sqrt(3*self.n_c)))
+            self.x0 = self.hexagonal_lattice(int(np.ceil(self.L/0.5)),int(np.ceil(self.L/np.sqrt(3))))
             self.x0 = self.x0[self.x0.max(axis=1) < L*0.95]
             self.x = self.x0
             self.n_c = self.x0.shape[0]
@@ -310,7 +314,7 @@ class Tissue:
                 ax.add_collection(p)
 
 
-        def remove_repeats(self,tri):
+        def remove_repeats(self,tri,n_c):
             """
             For a given triangulation (nv x 3), remove repeated entries (i.e. rows)
 
@@ -327,7 +331,7 @@ class Tissue:
             :param tri: (nv x 3) matrix, the triangulation
             :return: triangulation minus the repeated entries (nv* x 3) (where nv* is the new # vertices).
             """
-            tri = order_tris(tri)
+            tri = order_tris(np.mod(tri,n_c))
             sorted_tri = tri[np.lexsort(tri.T), :]
             row_mask = np.append([True], np.any(np.diff(sorted_tri, axis=0), 1))
             return sorted_tri[row_mask]
@@ -361,14 +365,70 @@ class Tissue:
             #1. Tile cell positions 9-fold to perform the periodic triangulation
             #   Calculates y from x. y is (9nc x 2) matrix, where the first (nc x 2) are the "true" cell positions,
             #   and the rest are translations
-            L = self.L #Domain size (square)
-            grid_x,grid_y = np.mgrid[-1:2,-1:2]
-            grid_x[0,0],grid_x[1,1] = grid_x[1,1],grid_x[0,0]
-            grid_y[0,0],grid_y[1,1] = grid_y[1,1],grid_y[0,0]
-            y = np.vstack([x + np.array([i*L,j*L]) for i,j in np.array([grid_x.ravel(),grid_y.ravel()]).T])
+            y = make_y(x,self.L*self.grid_xy)
 
+
+            #2. Perform the triangulation on y
+            #   The **triangle** package (tr) returns a dictionary, containing the triangulation.
+            #   This triangulation is extracted and saved as tri
+            t = tr.triangulate({"vertices": y})
+            tri = t["triangles"]
+            n_c = x.shape[0]
+
+            #3. Find triangles with **at least one** cell within the "true" frame (i.e. with **at least one** "normal cell")
+            #   (Ignore entries with -1, a quirk of the **triangle** package, which denotes boundary triangles
+            #   Generate a mask -- one_in -- that considers such triangles
+            #   Save the new triangulation by applying the mask -- new_tri
+            tri = tri[(tri != -1).all(axis=1)]
+            one_in = (tri<n_c).any(axis=1)
+            new_tri = tri[one_in]
+
+            #4. Remove repeats in new_tri
+            #   new_tri contains repeats of the same cells, i.e. in cases where triangles straddle a boundary
+            #   Use remove_repeats function to remove these. Repeats are flagged up as entries with the same trio of
+            #   cell ids, which are transformed by the mod function to account for periodicity. See function for more details
+            n_tri = self.remove_repeats(new_tri,n_c)
+
+            #5. Calculate vertex positions, the circumcentre of the three cells. See function doc-string for details
+            V = self.get_vertex_periodic(x,n_tri)
+
+            #6. Store outputs
+            self.n_v = n_tri.shape[0]
+            self.vs = V
+            self.tris = n_tri
+
+            #7. Manually calculate the neighbours. See doc_string for conventions.
+            n_neigh = get_neighbours(n_tri)
+            self.v_neighbours = n_neigh
+            self.neighbours = V[n_neigh]
+
+
+
+        def _triangulate_periodic_just_triangulation(self,x):
+            """
+            Calculates the periodic triangulation on the set of points x.
+
+            Stores:
+                self.n_v = number of vertices (int32)
+                self.tris = triangulation of the vertices (nv x 3) matrix.
+                    Cells are stored in CCW order. As a convention, the first entry has the smallest cell id
+                    (Which entry comes first is, in and of itself, arbitrary, but is utilised elsewhere)
+                self.vs = coordinates of each vertex; (nv x 2) matrix
+                self.v_neighbours = vertex ids (i.e. rows of self.vs) corresponding to the 3 neighbours of a given vertex (nv x 3).
+                    In CCW order, where vertex i {i=0..2} is opposite cell i in the corresponding row of self.tris
+                self.neighbours = coordinates of each neighbouring vertex (nv x 3 x 2) matrix
+
+            :param x: (nc x 2) matrix with the coordinates of each cell
+            """
+
+            #1. Tile cell positions 9-fold to perform the periodic triangulation
+            #   Calculates y from x. y is (9nc x 2) matrix, where the first (nc x 2) are the "true" cell positions,
+            #   and the rest are translations
+
+            # y = np.vstack([x + np.array([i*L,j*L]) for i,j in np.array([self.grid_x.ravel(),self.grid_y.ravel()]).T])
+            y = make_y(x,self.grid_xy*self.L)
             # #1b. Reduce excess grid for efficiency.
-            # self.bleed = 0.5
+            # self.bleed = 0.1
             # y = y[(y<L*(1+self.bleed)).all(axis=1)+(y>-L*self.bleed).all(axis=1)]
 
 
@@ -379,9 +439,9 @@ class Tissue:
             tri = t["triangles"]
             n_c = x.shape[0]
 
-            #3. Generate a "normal cell" mask for y, i.e. cells that are considered in x
-            normal_cells = np.zeros(n_c*9)
-            normal_cells[:n_c] = 1
+            # #3. Generate a "normal cell" mask for y, i.e. cells that are considered in x
+            # normal_cells = np.zeros(n_c*9)
+            # normal_cells[:n_c] = 1
 
             #4. Find triangles with **at least one** cell within the "true" frame (i.e. with **at least one** "normal cell")
             #   (Ignore entries with -1, a quirk of the **triangle** package, which denotes boundary triangles
@@ -395,21 +455,8 @@ class Tissue:
             #   new_tri contains repeats of the same cells, i.e. in cases where triangles straddle a boundary
             #   Use remove_repeats function to remove these. Repeats are flagged up as entries with the same trio of
             #   cell ids, which are transformed by the mod function to account for periodicity. See function for more details
-            n_tri = self.remove_repeats(np.mod(new_tri,n_c))
-
-            #6. Calculate vertex positions, the circumcentre of the three cells. See function doc-string for details
-            V = self.get_vertex_periodic(x,n_tri)
-
-            #7. Store outputs
-            self.n_v = n_tri.shape[0]
-            self.vs = V
-            self.tris = n_tri
-
-            #8. Manually calculate the neighbours. See doc_string for conventions.
-            n_neigh = get_neighbours(n_tri)
-            self.v_neighbours = n_neigh
-            self.neighbours = V[n_neigh]
-
+            n_tri = self.remove_repeats(new_tri,n_c)
+            return n_tri
 
         def tri_angles(self,x,tri):
             return tri_angles(x, tri,self.L)
@@ -427,28 +474,6 @@ class Tissue:
             # cos_Angles = (b2+c2-a2)/(2*np.sqrt(b2)*np.sqrt(c2))
             # Angles = np.arccos(cos_Angles)
             # return Angles
-
-        def equiangulate(self,x,tri,v_neighbours):
-            return equiangulate(x, tri, v_neighbours, self.L)
-            # three = np.arange(3).astype(np.int32)
-            # nv = tri.shape[0]
-            # no_flips = False
-            # Angles = self.tri_angles(x, tri)
-            # while no_flips is False:
-            #     flipped = 0
-            #     for i in range(nv):
-            #         for k in range(3):
-            #             neighbour = v_neighbours[i,k]
-            #             if neighbour > i:
-            #                 k2 = np.inner(v_neighbours[neighbour]==i,three)
-            #                 theta = Angles[i,k] + Angles[neighbour,k2]
-            #                 if theta > np.pi:
-            #                     flipped+=1
-            #                     tri[i,np.mod(k+2,3)] = tri[neighbour,k2]
-            #                     tri[neighbour,np.mod(k2+2,3)] = tri[i,k]
-            #                     v_neighbours = get_neighbours_j(tri, v_neighbours, [i,neighbour])
-            #                     Angles[[i,neighbour]] = self.tri_angles(x,tri[[i,neighbour]])
-            #     no_flips = flipped==0
 
         def get_P_periodic(self,neighbours, vs):
             """
@@ -482,16 +507,17 @@ class Tissue:
             :param vs: (nv x 2) matrix considering coordinates of each vertex
             :return: self.A saves the areas of each cell
             """
-            AA_mat = np.empty((neighbours.shape[0], neighbours.shape[1]))
             Cents = np.array([(self.CV_matrix.T * self.x[:, 0]).sum(axis=-1),(self.CV_matrix.T * self.x[:, 1]).sum(axis=-1)]).T
-            for i in range(3):
-                Neighbours = np.remainder(neighbours[:, np.mod(i+2,3)] - Cents[:,i] + self.L / 2, self.L)
-                Vs = np.remainder(vs - Cents[:,i] + self.L / 2, self.L)
-                AA_mat[:, i] = 0.5 * (Neighbours[:, 0] * Vs[:, 1] - Neighbours[:, 1] * Vs[:, 0])
-
-            self.A = np.zeros((self.n_c))
-            for i in range(3):
-                self.A += np.dot(self.CV_matrix[:,:,i],AA_mat[:,i])
+            self.A = get_A_periodic(vs, neighbours, Cents, self.CV_matrix, self.L, self.n_c)
+            # AA_mat = np.empty((neighbours.shape[0], neighbours.shape[1]))
+            # for i in range(3):
+            #     Neighbours = np.remainder(neighbours[:, np.mod(i+2,3)] - Cents[:,i] + self.L / 2, self.L)
+            #     Vs = np.remainder(vs - Cents[:,i] + self.L / 2, self.L)
+            #     AA_mat[:, i] = 0.5 * (Neighbours[:, 0] * Vs[:, 1] - Neighbours[:, 1] * Vs[:, 0])
+            #
+            # self.A = np.zeros((self.n_c))
+            # for i in range(3):
+            #     self.A += np.dot(self.CV_matrix[:,:,i],AA_mat[:,i])
             return self.A
 
         def get_F_periodic(self,neighbours,vs):
@@ -570,6 +596,7 @@ class Tissue:
             self.x = x.copy()
             self.x_save = np.zeros((n_t,self.n_c,2))
             self.tri_save = np.zeros((n_t,self.tris.shape[0],3),dtype=np.int32)
+            self._triangulate_periodic(x)
             for i in range(n_t):
                 print(i)
                 self.triangulate_periodic(x)
@@ -669,20 +696,6 @@ def dhdr_periodic(rijk_,vs,L):
 
 
     return DHDR
-#
-# @jit(nopython=True,cache=True)
-# def get_neighbours(tri):
-#     neigh = np.zeros_like(tri,dtype=np.int32)
-#     for i in range(3):
-#         JK = tri[:, np.mod(np.arange(1, 3) + i, 3)]
-#         for j, jk in enumerate(JK):
-#             mask1,mask2 = np.zeros(tri.shape[0],dtype=np.bool_),np.zeros(tri.shape[0],dtype=np.bool_)
-#             for k in range(3):
-#                 mask1+=(tri[:,k] == jk[0])
-#                 mask2+=(tri[:,k] == jk[1])
-#             Neigh = np.nonzero(mask1*mask2)[0]
-#             neigh[j, i] = Neigh[Neigh != j][0]
-#     return neigh
 
 @jit(nopython=True)
 def get_neighbours(tri,neigh=None):
@@ -707,6 +720,10 @@ def get_neighbours(tri,neigh=None):
 
 @jit(nopython=True,cache=True)
 def get_neighbours_j(tri,neigh,js):
+    """
+    Finds updates the neighbours file only for a subset of vertices, provided by the list "js"
+    ~~beta~~
+    """
     tri_compare = np.concatenate((tri.T, tri.T)).T.reshape((-1, 3, 2))
     for j in js:
         tri_sample_flip = np.flip(tri[j])
@@ -883,3 +900,25 @@ def get_k2(tri, v_neighbours):
             k2 = ((v_neighbours[neighbour] == i) * three).sum()
             k2s[i, k] = k2
     return k2s
+
+@jit(nopython=True,cache=True)
+def make_y(x,Lgrid_xy):
+    n_c = x.shape[0]
+    y = np.empty((n_c*9,x.shape[1]))
+    for k in range(9):
+        y[k*n_c:(k+1)*n_c] = x + Lgrid_xy[k]
+    return y
+
+
+@jit(nopython=True,cache=True)
+def get_A_periodic(vs,neighbours,Cents,CV_matrix,L,n_c):
+    AA_mat = np.empty((neighbours.shape[0], neighbours.shape[1]))
+    for i in range(3):
+        Neighbours = np.remainder(neighbours[:, np.mod(i + 2, 3)] - Cents[:, i] + L / 2, L)
+        Vs = np.remainder(vs - Cents[:, i] + L / 2, L)
+        AA_mat[:, i] = 0.5 * (Neighbours[:, 0] * Vs[:, 1] - Neighbours[:, 1] * Vs[:, 0])
+
+    A = np.zeros((n_c))
+    for i in range(3):
+        A += np.asfortranarray(CV_matrix[:, :, i])@np.asfortranarray(AA_mat[:, i])
+    return A
