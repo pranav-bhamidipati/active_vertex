@@ -89,11 +89,9 @@ class Tissue:
             return points
 
 
-        def make_init(self,L):
+        def make_init(self,L,noise=0.005):
             """
             Make initial condition. Currently, this is a hexagonal lattice + noise
-
-            Uses the stored self.noise as the noise input.
 
             Makes reference to the self.hexagonal_lattice function, then crops down to the reference frame
 
@@ -103,9 +101,10 @@ class Tissue:
                 self.x = clone of self.x0
 
             :param L: Domain size/length (np.float32)
+            :param noise: Gaussian noise added to {x,y} coordinates (np.float32)
             """
             self.L = L
-            self.x0 = self.hexagonal_lattice(int(np.ceil(self.L/0.5)),int(np.ceil(self.L/np.sqrt(3))))
+            self.x0 = self.hexagonal_lattice(int(np.ceil(self.L/0.5)),int(np.ceil(self.L/np.sqrt(3))),noise=noise)
             self.x0 = self.x0[self.x0.max(axis=1) < L*0.95]
             self.x = self.x0
             self.n_c = self.x0.shape[0]
@@ -289,8 +288,6 @@ class Tissue:
             bleed = 0.1
             c_types_print = c_types_print[(y<L*(1+bleed)).all(axis=1)+(y>-L*bleed).all(axis=1)]
             y = y[(y<L*(1+bleed)).all(axis=1)+(y>-L*bleed).all(axis=1)]
-            # Vor = Voronoi(y)
-            # voronoi_plot_2d(Vor, ax=ax)
             regions, vertices = self.voronoi_finite_polygons_2d(Voronoi(y))
 
 
@@ -483,19 +480,20 @@ class Tissue:
             :param vs: (nv x 2) matrix considering coordinates of each vertex
             :return: self.P saves the areas of each cell
             """
-
-            P_m = np.empty((neighbours.shape[0], neighbours.shape[1]))
-            for i in range(3):
-                Neighbours = np.remainder(neighbours[:,i] - vs + self.L/2,self.L) - self.L/2
-                P_m[:, i] = np.sqrt((Neighbours[:,0]) ** 2 + (Neighbours[:,1]) ** 2) #* self.boundary_mask
-
-            PP_mat = np.zeros(P_m.shape)
-            for i in range(3):
-               PP_mat[:, i] = (P_m[:, np.mod(i + 1, 3)] + P_m[:, np.mod(i + 2, 3)]) / 2
-
-            self.P = np.zeros((self.n_c))
-            for i in range(3):
-               self.P += np.dot(self.CV_matrix[:, :, i], PP_mat[:, i])
+            self.P = get_P_periodic(vs, neighbours, self.CV_matrix, self.L, self.n_c)
+            #
+            # P_m = np.empty((neighbours.shape[0], neighbours.shape[1]))
+            # for i in range(3):
+            #     Neighbours = np.remainder(neighbours[:,i] - vs + self.L/2,self.L) - self.L/2
+            #     P_m[:, i] = np.sqrt((Neighbours[:,0]) ** 2 + (Neighbours[:,1]) ** 2) #* self.boundary_mask
+            #
+            # PP_mat = np.zeros(P_m.shape)
+            # for i in range(3):
+            #    PP_mat[:, i] = (P_m[:, np.mod(i + 1, 3)] + P_m[:, np.mod(i + 2, 3)]) / 2
+            #
+            # self.P = np.zeros((self.n_c))
+            # for i in range(3):
+            #    self.P += np.dot(self.CV_matrix[:, :, i], PP_mat[:, i])
 
             return self.P
 
@@ -509,15 +507,6 @@ class Tissue:
             """
             Cents = np.array([(self.CV_matrix.T * self.x[:, 0]).sum(axis=-1),(self.CV_matrix.T * self.x[:, 1]).sum(axis=-1)]).T
             self.A = get_A_periodic(vs, neighbours, Cents, self.CV_matrix, self.L, self.n_c)
-            # AA_mat = np.empty((neighbours.shape[0], neighbours.shape[1]))
-            # for i in range(3):
-            #     Neighbours = np.remainder(neighbours[:, np.mod(i+2,3)] - Cents[:,i] + self.L / 2, self.L)
-            #     Vs = np.remainder(vs - Cents[:,i] + self.L / 2, self.L)
-            #     AA_mat[:, i] = 0.5 * (Neighbours[:, 0] * Vs[:, 1] - Neighbours[:, 1] * Vs[:, 0])
-            #
-            # self.A = np.zeros((self.n_c))
-            # for i in range(3):
-            #     self.A += np.dot(self.CV_matrix[:,:,i],AA_mat[:,i])
             return self.A
 
         def get_F_periodic(self,neighbours,vs):
@@ -533,70 +522,91 @@ class Tissue:
             :param vs:
             :return:
             """
-            ### Given orientation is preserved in the triangulation, can perform entire calculation in parallel.
-            ### Modifications are implemented to account for periodic boundary conditions (see np.remainder / np.mod)
-
-
-            ## 1. For each vertex h, define orientation of neighbouring vertices.
-            # For a given cell j, the neighbouring vertex oriented CCW with respect to the vertex h is denoted h_CCW
-            # Likewise for h_CW
-            h = np.empty((self.n_v,3,2))
-            for i in range(3):
-                h[:,i] = vs
-            h_CCW = np.roll(neighbours, 1, axis=1)
-            h_CW = np.roll(neighbours, -1, axis=1)
-            # h_CCW = np.roll(neighbours, 0, axis=1)
-            # h_CW = np.roll(neighbours, 2, axis=1)
-
-
-            ## 2. Calculate the area and perimeter vector terms within eq. A8,
-            # zet1 = (h3y - h7y,h3x-h7x) {line 2}
-            # zet2 = (h2x-h7x/ ...) {line 3}
-            zet1 = (np.flip(np.remainder(h_CCW - h_CW + self.L/2,self.L) - self.L/2,axis=2))
-            zet2a = np.remainder(h - h_CW + self.L/2,self.L) - self.L/2
-            zet2b = np.remainder(h - h_CCW + self.L/2,self.L) - self.L/2
-            zet2a_norm, zet2b_norm = np.sqrt((zet2a**2).sum(axis=2)),np.sqrt((zet2b**2).sum(axis=2))
-            zet2 = np.empty(zet1.shape)
-            for i in range(2):
-                zet2[:,:,i] = zet2a[:,:,i]/zet2a_norm + zet2b[:,:,i]/zet2b_norm
-            zet2 = zet2
-
-            J_CCW = self.J[self.tris, np.roll(self.tris, 1, axis=-1)]
-            J_CW = self.J[self.tris, np.roll(self.tris, -1, axis=-1)]
-
-            zet3 = np.empty(zet1.shape)
-            for i in range(2):
-                zet3[:,:,i] = J_CW*zet2a[:,:,i]/zet2a_norm + J_CCW*zet2b[:,:,i]/zet2b_norm
-
-            ## 3. Find areas and perimeters of the cells and restructure data wrt. the triangulation
-            vA = self.A[self.tris]
-            vP = self.P[self.tris]
-
-            #4. Calculate ∂h/∂r. This is for cell i (which may or may not be cell j, and triangulates with cell j)
-            # This last two dims are a Jacobinan (2x2) matrix, defining {x,y} for h and r. See function description for details
-            DHDR = dhdr_periodic(self.x[self.tris],vs,self.L)#order is wrt cell i
-
-
-            #5. Now calculate the force component for each vertex, with respect to the 3 neighbouring cells
-            #   This is essentially decomposing the chain rule of the expression of F for each cell by vertex
-            #   M_sum is a (nv,2,3) matrix. This is the force contribution for each cell of a given triangle/vertex (3rd dim). Considering {x,y} components (2nd dim)
-            #       Within the function, this calculates (direct and indirect) contributions of each cell wrt each other cell (i.e. 3x3), then adds them together
-            M_sum = make_M(DHDR,self.n_v,self.kappa_A,self.kappa_P,vA,vP,self.A0,self.P0,zet1,zet2,zet3)
-            self.M = M_sum
-
-            #6. Compile force components wrt. cells by using the cell-to-vertex connection matrix.
-            #       Force on cell_i = SUM_{vertices of cell i} {forces at each vertex wrt. cell i}
-            F = compile_cell_forces(self.CV_matrix,M_sum,self.n_c)
+            J_CCW = self.J[self.tris, roll_forward(self.tris)]
+            J_CW = self.J[self.tris, roll_reverse(self.tris)]
+            X = self.x[self.tris]
+            F = get_F_periodic(vs, neighbours, self.tris, self.CV_matrix, self.n_v, self.n_c, self.L, J_CW, J_CCW, self.A, self.P, X, self.kappa_A, self.kappa_P, self.A0, self.P0)
             return F
+        #
+        # def _get_F_periodic(self, neighbours, vs):
+        #     """
+        #     Calculate the forces acting on each cell via the SPV formalism.
+        #
+        #     Detailed explanations of each stage are described in line, but overall the strategy leverages the chain-rule
+        #     (vertex-wise) decomposition of the expression for forces acting on each cell. Using this, contributions from
+        #     each vertex is calculated **on the triangulation**, without the need for explicitly calculating the voronoi
+        #     polygons. Hugely improves efficiency
+        #
+        #     :param neighbours:
+        #     :param vs:
+        #     :return:
+        #     """
+        #
+        #
+        #     ### Given orientation is preserved in the triangulation, can perform entire calculation in parallel.
+        #     ### Modifications are implemented to account for periodic boundary conditions (see np.remainder / np.mod)
+        #
+        #
+        #     ## 1. For each vertex h, define orientation of neighbouring vertices.
+        #     # For a given cell j, the neighbouring vertex oriented CCW with respect to the vertex h is denoted h_CCW
+        #     # Likewise for h_CW
+        #     h = np.empty((self.n_v,3,2))
+        #     for i in range(3):
+        #         h[:,i] = vs
+        #     h_CCW = np.roll(neighbours, 1, axis=1)
+        #     h_CW = np.roll(neighbours, -1, axis=1)
+        #     # h_CCW = np.roll(neighbours, 0, axis=1)
+        #     # h_CW = np.roll(neighbours, 2, axis=1)
+        #
+        #
+        #     ## 2. Calculate the area and perimeter vector terms within eq. A8,
+        #     # zet1 = (h3y - h7y,h3x-h7x) {line 2}
+        #     # zet2 = (h2x-h7x/ ...) {line 3}
+        #     zet1 = (np.flip(np.remainder(h_CCW - h_CW + self.L/2,self.L) - self.L/2,axis=2))
+        #     zet2a = np.remainder(h - h_CW + self.L/2,self.L) - self.L/2
+        #     zet2b = np.remainder(h - h_CCW + self.L/2,self.L) - self.L/2
+        #     zet2a_norm, zet2b_norm = np.sqrt((zet2a**2).sum(axis=2)),np.sqrt((zet2b**2).sum(axis=2))
+        #     zet2 = np.empty(zet1.shape)
+        #     for i in range(2):
+        #         zet2[:,:,i] = zet2a[:,:,i]/zet2a_norm + zet2b[:,:,i]/zet2b_norm
+        #     zet2 = zet2
+        #
+        #     J_CCW = self.J[self.tris, np.roll(self.tris, 1, axis=-1)]
+        #     J_CW = self.J[self.tris, np.roll(self.tris, -1, axis=-1)]
+        #
+        #     zet3 = np.empty(zet1.shape)
+        #     for i in range(2):
+        #         zet3[:,:,i] = J_CW*zet2a[:,:,i]/zet2a_norm + J_CCW*zet2b[:,:,i]/zet2b_norm
+        #
+        #     ## 3. Find areas and perimeters of the cells and restructure data wrt. the triangulation
+        #     vA = self.A[self.tris]
+        #     vP = self.P[self.tris]
+        #
+        #     #4. Calculate ∂h/∂r. This is for cell i (which may or may not be cell j, and triangulates with cell j)
+        #     # This last two dims are a Jacobinan (2x2) matrix, defining {x,y} for h and r. See function description for details
+        #     DHDR = dhdr_periodic(self.x[self.tris],vs,self.L)#order is wrt cell i
+        #
+        #
+        #     #5. Now calculate the force component for each vertex, with respect to the 3 neighbouring cells
+        #     #   This is essentially decomposing the chain rule of the expression of F for each cell by vertex
+        #     #   M_sum is a (nv,2,3) matrix. This is the force contribution for each cell of a given triangle/vertex (3rd dim). Considering {x,y} components (2nd dim)
+        #     #       Within the function, this calculates (direct and indirect) contributions of each cell wrt each other cell (i.e. 3x3), then adds them together
+        #     M_sum = make_M(DHDR,self.n_v,self.kappa_A,self.kappa_P,vA,vP,self.A0,self.P0,zet1,zet2,zet3)
+        #     self.M = M_sum
+        #
+        #     #6. Compile force components wrt. cells by using the cell-to-vertex connection matrix.
+        #     #       Force on cell_i = SUM_{vertices of cell i} {forces at each vertex wrt. cell i}
+        #     F = compile_cell_forces(self.CV_matrix,M_sum,self.n_c)
+        #     return F
 
         def simulate_periodic(self):
             n_t = self.t_span.size
             self.n_t = n_t
             x = self.x0.copy()
+            self._triangulate_periodic(x)
             self.x = x.copy()
             self.x_save = np.zeros((n_t,self.n_c,2))
             self.tri_save = np.zeros((n_t,self.tris.shape[0],3),dtype=np.int32)
-            self._triangulate_periodic(x)
             for i in range(n_t):
                 print(i)
                 self.triangulate_periodic(x)
@@ -781,25 +791,6 @@ def circumcenter_periodic(C,L):
     return vs
 
 
-@jit(nopython=True,cache=True)
-def make_M(DHDR,n_v,kappa_A,kappa_P,vA,vP,A0,P0,zet1,zet2,zet3):
-    M = np.zeros((2, n_v, 2, 3))
-    for i in range(3):
-        for j in range(3):
-            for Fdim in range(2):
-                M[:, :, Fdim, i] += DHDR[:, i, Fdim].T * (kappa_A * (vA[:, j] - A0) * zet1[:, j].T +
-                                                            2 * kappa_P * (vP[:, j]-P0) * zet2[:, j].T + zet3[:,j].T)
-    M_out = M[0] + M[1]
-    return M_out
-
-
-@jit(nopython=True,cache=True)
-def compile_cell_forces(CV_matrix,M_sum,n_c):
-    dEdr = np.zeros((n_c, 2))
-    for i in range(3):
-        dEdr += np.asfortranarray(CV_matrix[:, :, i])@np.asfortranarray(M_sum[:, :, i])
-    F = -dEdr
-    return F
 
 @jit(nopython=True,cache=True)
 def np_apply_along_axis(func1d, axis, arr):
@@ -922,3 +913,112 @@ def get_A_periodic(vs,neighbours,Cents,CV_matrix,L,n_c):
     for i in range(3):
         A += np.asfortranarray(CV_matrix[:, :, i])@np.asfortranarray(AA_mat[:, i])
     return A
+
+@jit(nopython=True,cache=True)
+def get_P_periodic(vs,neighbours,CV_matrix,L,n_c):
+    P_m = np.empty((neighbours.shape[0], neighbours.shape[1]))
+    for i in range(3):
+        Neighbours = np.remainder(neighbours[:, i] - vs + L / 2, L) - L / 2
+        P_m[:, i] = np.sqrt((Neighbours[:, 0]) ** 2 + (Neighbours[:, 1]) ** 2)  # * self.boundary_mask
+
+    PP_mat = np.zeros(P_m.shape)
+    for i in range(3):
+        PP_mat[:, i] = (P_m[:, np.mod(i + 1, 3)] + P_m[:, np.mod(i + 2, 3)]) / 2
+
+    P = np.zeros((n_c))
+    for i in range(3):
+        P += np.asfortranarray(CV_matrix[:, :, i])@np.asfortranarray(PP_mat[:, i])
+    return P
+
+@jit(nopython=True,cache=True)
+def roll_forward(x):
+    """
+    Jitted equivalent to np.roll(x,1,axis=1)
+    :param x:
+    :return:
+    """
+    return np.column_stack((x[:,2],x[:,:2]))
+
+@jit(nopython=True,cache=True)
+def roll_reverse(x):
+    """
+    Jitted equivalent to np.roll(x,-1,axis=1)
+    :param x:
+    :return:
+    """
+    return np.column_stack((x[:,1:3],x[:,0]))
+
+@jit(nopython=True,cache=True)
+def get_F_periodic(vs, neighbours,tris,CV_matrix,n_v,n_c,L,J_CW,J_CCW,A,P,X,kappa_A,kappa_P,A0,P0):
+
+    h_j = np.empty((n_v, 3, 2))
+    for i in range(3):
+        h_j[:, i] = vs
+    h_jp1 = np.dstack((roll_forward(neighbours[:,:,0]),roll_forward(neighbours[:,:,1])))
+    h_jm1 = np.dstack((roll_reverse(neighbours[:,:,0]),roll_reverse(neighbours[:,:,1])))
+
+
+    dAdh_j = np.mod(h_jp1 - h_jm1 + L / 2, L) - L / 2
+    dAdh_j = np.dstack((dAdh_j[:,:,1],dAdh_j[:,:,0]))
+
+    l_jm1 = np.mod(h_j - h_jm1 + L / 2, L) - L / 2
+    l_jp1 = np.mod(h_j - h_jp1 + L / 2, L) - L / 2
+    l_jm1_norm, l_jp1_norm = np.sqrt(l_jm1[:,:,0] ** 2 + l_jm1[:,:,1] ** 2), np.sqrt(l_jp1[:,:,0] ** 2 +  l_jp1[:,:,1] ** 2)
+    dPdh_j = (l_jm1.T/l_jm1_norm.T + l_jp1.T/l_jp1_norm.T).T
+
+    dljidh_j = (l_jm1.T * J_CW.T/l_jm1_norm.T + l_jp1.T * J_CCW.T/l_jp1_norm.T).T
+
+
+    ## 3. Find areas and perimeters of the cells and restructure data wrt. the triangulation
+    vA = A[tris.ravel()].reshape(tris.shape)
+    vP = P[tris.ravel()].reshape(tris.shape)
+
+    # 4. Calculate ∂h/∂r. This is for cell i (which may or may not be cell j, and triangulates with cell j)
+    # This last two dims are a Jacobinan (2x2) matrix, defining {x,y} for h and r. See function description for details
+    DHDR = dhdr_periodic(X, vs, L)  # order is wrt cell i
+
+    # 5. Now calculate the force component for each vertex, with respect to the 3 neighbouring cells
+    #   This is essentially decomposing the chain rule of the expression of F for each cell by vertex
+    #   M_sum is a (nv,2,3) matrix. This is the force contribution for each cell of a given triangle/vertex (3rd dim). Considering {x,y} components (2nd dim)
+    #       Within the function, this calculates (direct and indirect) contributions of each cell wrt each other cell (i.e. 3x3), then adds them together
+    M = np.zeros((2, n_v, 2, 3))
+    for i in range(3):
+        for j in range(3):
+            for Fdim in range(2):
+                M[:, :, Fdim, i] += DHDR[:, i, Fdim].T * \
+                                    (kappa_A * (vA[:, j] - A0) * dAdh_j[:, j].T
+                                     + kappa_P * (vP[:, j]-P0) * dPdh_j[:, j].T
+                                     + dljidh_j[:,j].T)
+    M = M[0] + M[1]
+
+
+    # 6. Compile force components wrt. cells by using the cell-to-vertex connection matrix.
+    #       Force on cell_i = SUM_{vertices of cell i} {forces at each vertex wrt. cell i}
+    dEdr = np.zeros((n_c, 2))
+    for i in range(3):
+        dEdr += np.asfortranarray(CV_matrix[:, :, i])@np.asfortranarray(M[:, :, i])
+    F = -dEdr
+
+    return F
+
+
+#
+# @jit(nopython=True,cache=True)
+# def make_M(DHDR,n_v,kappa_A,kappa_P,vA,vP,A0,P0,zet1,zet2,zet3):
+#     M = np.zeros((2, n_v, 2, 3))
+#     for i in range(3):
+#         for j in range(3):
+#             for Fdim in range(2):
+#                 M[:, :, Fdim, i] += DHDR[:, i, Fdim].T * (kappa_A * (vA[:, j] - A0) * zet1[:, j].T +
+#                                                             kappa_P * (vP[:, j]-P0) * zet2[:, j].T + zet3[:,j].T)
+#     M_out = M[0] + M[1]
+#     return M_out
+#
+#
+# @jit(nopython=True,cache=True)
+# def compile_cell_forces(CV_matrix,M_sum,n_c):
+#     dEdr = np.zeros((n_c, 2))
+#     for i in range(3):
+#         dEdr += np.asfortranarray(CV_matrix[:, :, i])@np.asfortranarray(M_sum[:, :, i])
+#     F = -dEdr
+#     return F
