@@ -56,6 +56,11 @@ class Tissue:
             self.grid_x[0,0],self.grid_x[1,1] = self.grid_x[1,1],self.grid_x[0,0]
             self.grid_y[0,0],self.grid_y[1,1] = self.grid_y[1,1],self.grid_y[0,0]
             self.grid_xy = np.array([self.grid_x.ravel(),self.grid_y.ravel()]).T
+
+            self.x_save = []
+            self.tri_save = []
+
+
         def generate_cells(self,n_c):
             """
             Generate the cells.
@@ -401,77 +406,6 @@ class Tissue:
 
 
 
-        def _triangulate_periodic_just_triangulation(self,x):
-            """
-            Calculates the periodic triangulation on the set of points x.
-
-            Stores:
-                self.n_v = number of vertices (int32)
-                self.tris = triangulation of the vertices (nv x 3) matrix.
-                    Cells are stored in CCW order. As a convention, the first entry has the smallest cell id
-                    (Which entry comes first is, in and of itself, arbitrary, but is utilised elsewhere)
-                self.vs = coordinates of each vertex; (nv x 2) matrix
-                self.v_neighbours = vertex ids (i.e. rows of self.vs) corresponding to the 3 neighbours of a given vertex (nv x 3).
-                    In CCW order, where vertex i {i=0..2} is opposite cell i in the corresponding row of self.tris
-                self.neighbours = coordinates of each neighbouring vertex (nv x 3 x 2) matrix
-
-            :param x: (nc x 2) matrix with the coordinates of each cell
-            """
-
-            #1. Tile cell positions 9-fold to perform the periodic triangulation
-            #   Calculates y from x. y is (9nc x 2) matrix, where the first (nc x 2) are the "true" cell positions,
-            #   and the rest are translations
-
-            # y = np.vstack([x + np.array([i*L,j*L]) for i,j in np.array([self.grid_x.ravel(),self.grid_y.ravel()]).T])
-            y = make_y(x,self.grid_xy*self.L)
-            # #1b. Reduce excess grid for efficiency.
-            # self.bleed = 0.1
-            # y = y[(y<L*(1+self.bleed)).all(axis=1)+(y>-L*self.bleed).all(axis=1)]
-
-
-            #2. Perform the triangulation on y
-            #   The **triangle** package (tr) returns a dictionary, containing the triangulation.
-            #   This triangulation is extracted and saved as tri
-            t = tr.triangulate({"vertices": y})
-            tri = t["triangles"]
-            n_c = x.shape[0]
-
-            # #3. Generate a "normal cell" mask for y, i.e. cells that are considered in x
-            # normal_cells = np.zeros(n_c*9)
-            # normal_cells[:n_c] = 1
-
-            #4. Find triangles with **at least one** cell within the "true" frame (i.e. with **at least one** "normal cell")
-            #   (Ignore entries with -1, a quirk of the **triangle** package, which denotes boundary triangles
-            #   Generate a mask -- one_in -- that considers such triangles
-            #   Save the new triangulation by applying the mask -- new_tri
-            tri = tri[(tri != -1).all(axis=1)]
-            one_in = (tri<n_c).any(axis=1)
-            new_tri = tri[one_in]
-
-            #5. Remove repeats in new_tri
-            #   new_tri contains repeats of the same cells, i.e. in cases where triangles straddle a boundary
-            #   Use remove_repeats function to remove these. Repeats are flagged up as entries with the same trio of
-            #   cell ids, which are transformed by the mod function to account for periodicity. See function for more details
-            n_tri = self.remove_repeats(new_tri,n_c)
-            return n_tri
-
-        def tri_angles(self,x,tri):
-            return tri_angles(x, tri,self.L)
-            #
-            # L = self.L
-            # three = np.arange(3).astype(int)
-            # i_b = np.mod(three+1,3)
-            # i_c = np.mod(three+2,3)
-            #
-            # C = x[tri]
-            # a2 = (np.mod(C[:,i_b,0]-C[:,i_c,0]+L/2,L)-L/2)**2 + (np.mod(C[:,i_b,1]-C[:,i_c,1]+L/2,L)-L/2)**2
-            # b2 = (np.mod(C[:,:,0]-C[:,i_c,0]+L/2,L)-L/2)**2 + (np.mod(C[:,:,1]-C[:,i_c,1]+L/2,L)-L/2)**2
-            # c2 = (np.mod(C[:,i_b,0]-C[:,:,0]+L/2,L)-L/2)**2 + (np.mod(C[:,i_b,1]-C[:,:,1]+L/2,L)-L/2)**2
-            #
-            # cos_Angles = (b2+c2-a2)/(2*np.sqrt(b2)*np.sqrt(c2))
-            # Angles = np.arccos(cos_Angles)
-            # return Angles
-
         def get_P_periodic(self,neighbours, vs):
             """
             Calculates perimeter of each cell (considering periodic boundary conditions)
@@ -481,20 +415,6 @@ class Tissue:
             :return: self.P saves the areas of each cell
             """
             self.P = get_P_periodic(vs, neighbours, self.CV_matrix, self.L, self.n_c)
-            #
-            # P_m = np.empty((neighbours.shape[0], neighbours.shape[1]))
-            # for i in range(3):
-            #     Neighbours = np.remainder(neighbours[:,i] - vs + self.L/2,self.L) - self.L/2
-            #     P_m[:, i] = np.sqrt((Neighbours[:,0]) ** 2 + (Neighbours[:,1]) ** 2) #* self.boundary_mask
-            #
-            # PP_mat = np.zeros(P_m.shape)
-            # for i in range(3):
-            #    PP_mat[:, i] = (P_m[:, np.mod(i + 1, 3)] + P_m[:, np.mod(i + 2, 3)]) / 2
-            #
-            # self.P = np.zeros((self.n_c))
-            # for i in range(3):
-            #    self.P += np.dot(self.CV_matrix[:, :, i], PP_mat[:, i])
-
             return self.P
 
         def get_A_periodic(self,neighbours, vs):
@@ -527,79 +447,19 @@ class Tissue:
             X = self.x[self.tris]
             F = get_F_periodic(vs, neighbours, self.tris, self.CV_matrix, self.n_v, self.n_c, self.L, J_CW, J_CCW, self.A, self.P, X, self.kappa_A, self.kappa_P, self.A0, self.P0)
             return F
-        #
-        # def _get_F_periodic(self, neighbours, vs):
-        #     """
-        #     Calculate the forces acting on each cell via the SPV formalism.
-        #
-        #     Detailed explanations of each stage are described in line, but overall the strategy leverages the chain-rule
-        #     (vertex-wise) decomposition of the expression for forces acting on each cell. Using this, contributions from
-        #     each vertex is calculated **on the triangulation**, without the need for explicitly calculating the voronoi
-        #     polygons. Hugely improves efficiency
-        #
-        #     :param neighbours:
-        #     :param vs:
-        #     :return:
-        #     """
-        #
-        #
-        #     ### Given orientation is preserved in the triangulation, can perform entire calculation in parallel.
-        #     ### Modifications are implemented to account for periodic boundary conditions (see np.remainder / np.mod)
-        #
-        #
-        #     ## 1. For each vertex h, define orientation of neighbouring vertices.
-        #     # For a given cell j, the neighbouring vertex oriented CCW with respect to the vertex h is denoted h_CCW
-        #     # Likewise for h_CW
-        #     h = np.empty((self.n_v,3,2))
-        #     for i in range(3):
-        #         h[:,i] = vs
-        #     h_CCW = np.roll(neighbours, 1, axis=1)
-        #     h_CW = np.roll(neighbours, -1, axis=1)
-        #     # h_CCW = np.roll(neighbours, 0, axis=1)
-        #     # h_CW = np.roll(neighbours, 2, axis=1)
-        #
-        #
-        #     ## 2. Calculate the area and perimeter vector terms within eq. A8,
-        #     # zet1 = (h3y - h7y,h3x-h7x) {line 2}
-        #     # zet2 = (h2x-h7x/ ...) {line 3}
-        #     zet1 = (np.flip(np.remainder(h_CCW - h_CW + self.L/2,self.L) - self.L/2,axis=2))
-        #     zet2a = np.remainder(h - h_CW + self.L/2,self.L) - self.L/2
-        #     zet2b = np.remainder(h - h_CCW + self.L/2,self.L) - self.L/2
-        #     zet2a_norm, zet2b_norm = np.sqrt((zet2a**2).sum(axis=2)),np.sqrt((zet2b**2).sum(axis=2))
-        #     zet2 = np.empty(zet1.shape)
-        #     for i in range(2):
-        #         zet2[:,:,i] = zet2a[:,:,i]/zet2a_norm + zet2b[:,:,i]/zet2b_norm
-        #     zet2 = zet2
-        #
-        #     J_CCW = self.J[self.tris, np.roll(self.tris, 1, axis=-1)]
-        #     J_CW = self.J[self.tris, np.roll(self.tris, -1, axis=-1)]
-        #
-        #     zet3 = np.empty(zet1.shape)
-        #     for i in range(2):
-        #         zet3[:,:,i] = J_CW*zet2a[:,:,i]/zet2a_norm + J_CCW*zet2b[:,:,i]/zet2b_norm
-        #
-        #     ## 3. Find areas and perimeters of the cells and restructure data wrt. the triangulation
-        #     vA = self.A[self.tris]
-        #     vP = self.P[self.tris]
-        #
-        #     #4. Calculate ∂h/∂r. This is for cell i (which may or may not be cell j, and triangulates with cell j)
-        #     # This last two dims are a Jacobinan (2x2) matrix, defining {x,y} for h and r. See function description for details
-        #     DHDR = dhdr_periodic(self.x[self.tris],vs,self.L)#order is wrt cell i
-        #
-        #
-        #     #5. Now calculate the force component for each vertex, with respect to the 3 neighbouring cells
-        #     #   This is essentially decomposing the chain rule of the expression of F for each cell by vertex
-        #     #   M_sum is a (nv,2,3) matrix. This is the force contribution for each cell of a given triangle/vertex (3rd dim). Considering {x,y} components (2nd dim)
-        #     #       Within the function, this calculates (direct and indirect) contributions of each cell wrt each other cell (i.e. 3x3), then adds them together
-        #     M_sum = make_M(DHDR,self.n_v,self.kappa_A,self.kappa_P,vA,vP,self.A0,self.P0,zet1,zet2,zet3)
-        #     self.M = M_sum
-        #
-        #     #6. Compile force components wrt. cells by using the cell-to-vertex connection matrix.
-        #     #       Force on cell_i = SUM_{vertices of cell i} {forces at each vertex wrt. cell i}
-        #     F = compile_cell_forces(self.CV_matrix,M_sum,self.n_c)
-        #     return F
 
-        def simulate_periodic(self):
+        def simulate(self,print_every=1000):
+            """
+            Evolve the SPV.
+
+            Stores:
+                self.x_save = Cell centroids for each time-step (n_t x n_c x 2), where n_t is the number of time-steps
+                self.tri_save = Triangulation for each time-step (n_t x n_v x 3)
+
+
+            :param print_every: integer value to skip printing progress every "print_every" iterations.
+            :return: self.x_save
+            """
             n_t = self.t_span.size
             self.n_t = n_t
             x = self.x0.copy()
@@ -608,7 +468,8 @@ class Tissue:
             self.x_save = np.zeros((n_t,self.n_c,2))
             self.tri_save = np.zeros((n_t,self.tris.shape[0],3),dtype=np.int32)
             for i in range(n_t):
-                print(i)
+                if i % print_every == 0:
+                    print(i / n_t * 100, "%")
                 self.triangulate_periodic(x)
                 self.tri_save[i] = self.tris
                 self.assign_vertices()
@@ -623,6 +484,9 @@ class Tissue:
             return self.x_save
 
         def get_self_self(self):
+            """
+            Stores the percentage of self-self contacts (in self.self_self)
+            """
             self.self_self = np.zeros(self.n_t)
             for i, tri in enumerate(self.tri_save):
                 C_types = self.c_types[tri]
@@ -668,11 +532,18 @@ class Tissue:
 
 @jit(nopython=True,cache=True)
 def dhdr_periodic(rijk_,vs,L):
-    """Calculates ∂hi/dr where a,b,c are the coords of ri,rj,rk (cell centroids in triangulation)
+    """
+    Calculates ∂h_j/dr_i the Jacobian for all cells in each triangulation
 
     Last two dims: ((dhx/drx,dhx/dry),(dhy/drx,dhy/dry))
 
-    These are lifted from Mathematica"""
+    These are lifted from Mathematica
+
+    :param rijk_: (n_v x 3 x 2) np.float32 array of cell centroid positions for each cell in each triangulation (first two dims follow order of triangulation)
+    :param vs: (n_v x 2) np.float32 array of vertex positions, corresponding to each triangle in the triangulation
+    :param L: Domain size (np.float32)
+    :return: Jacobian for each cell of each triangulation (n_v x 3 x 2 x 2) np.float32 array (where the first 2 dims follow the order of the triangulation.
+    """
     rijk = np.empty_like(rijk_)
     for i in range(3):
         rijk[:,i,:] = np.remainder(rijk_[:,i] - vs + L/2,L) - L/2
@@ -709,9 +580,19 @@ def dhdr_periodic(rijk_,vs,L):
 
 @jit(nopython=True)
 def get_neighbours(tri,neigh=None):
-    """Update: more efficient algorithm to prevent double-counting
+    """
+    Given a triangulation, find the neighbouring triangles of each triangle.
+
+    By convention, the column i in the output -- neigh -- corresponds to the triangle that is opposite the cell i in that triangle.
+
+
 
     Can supply neigh, meaning the algorithm only fills in gaps (-1 entries)
+
+
+    :param tri: Triangulation (n_v x 3) np.int32 array
+    :param neigh: neighbourhood matrix to update {Optional}
+    :return: (n_v x 3) np.int32 array, storing the three neighbouring triangles. Values correspond to the row numbers of tri
     """
     if neigh is None:
         neigh = np.ones_like(tri,dtype=np.int32)*-1
@@ -729,50 +610,27 @@ def get_neighbours(tri,neigh=None):
     return neigh
 
 @jit(nopython=True,cache=True)
-def get_neighbours_j(tri,neigh,js):
-    """
-    Finds updates the neighbours file only for a subset of vertices, provided by the list "js"
-    ~~beta~~
-    """
-    tri_compare = np.concatenate((tri.T, tri.T)).T.reshape((-1, 3, 2))
-    for j in js:
-        tri_sample_flip = np.flip(tri[j])
-        tri_i = np.concatenate((tri_sample_flip, tri_sample_flip)).reshape(3, 2)
-        for k in range(3):
-            neighb, l = np.nonzero((tri_compare[:, :, 0] == tri_i[k, 0]) * (tri_compare[:, :, 1] == tri_i[k, 1]))
-            neighb, l = neighb[0], l[0]
-            neigh[j, k] = neighb
-            neigh[neighb, np.mod(2 - l, 3)] = j
-    return neigh
-
-@jit(nopython=True,cache=True)
 def order_tris(tri):
+    """
+    For each triangle (i.e. row in **tri**), order cell ids in ascending order
+    :param tri: Triangulation (n_v x 3) np.int32 array
+    :return: the ordered triangulation
+    """
     nv = tri.shape[0]
     for i in range(nv):
         Min = np.argmin(tri[i])
         tri[i] = tri[i,Min],tri[i,np.mod(Min+1,3)],tri[i,np.mod(Min+2,3)]
     return tri
 
-
-@jit(nopython=True,cache=True)
-def circumcenter(C):
-    ri, rj, rk = C.transpose(1,2,0)
-    ax, ay = ri
-    bx, by = rj
-    cx, cy = rk
-    d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
-    ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (
-            ay - by)) / d
-    uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (
-            bx - ax)) / d
-    vs = np.empty((ax.size,2),dtype=np.float64)
-    vs[:,0],vs[:,1] = ux,uy
-    return vs
-
-
-
 @jit(nopython=True,cache=True)
 def circumcenter_periodic(C,L):
+    """
+    Find the circumcentre (i.e. vertex position) of each triangle in the triangulation.
+
+    :param C: Cell centroids for each triangle in triangulation (n_c x 3 x 2) np.float32 array
+    :param L: Domain size (np.float32)
+    :return: Circumcentres/vertex-positions (n_v x 2) np.float32 array
+    """
     ri, rj, rk = C.transpose(1,2,0)
     r_mean = (ri+rj+rk)/3
     disp = r_mean - L / 2
@@ -791,24 +649,17 @@ def circumcenter_periodic(C,L):
     return vs
 
 
-
-@jit(nopython=True,cache=True)
-def np_apply_along_axis(func1d, axis, arr):
-    """https://github.com/numba/numba/issues/1269"""
-    assert arr.ndim == 2
-    assert axis in [0, 1]
-    if axis == 0:
-        result = np.empty(arr.shape[1],dtype=arr.dtype)
-        for i in range(len(result)):
-            result[i] = func1d(arr[:, i])
-    else:
-        result = np.empty(arr.shape[0],dtype=arr.dtype)
-        for i in range(len(result)):
-            result[i] = func1d(arr[i, :])
-    return result
-
 @jit(nopython=True,cache=True)
 def tri_angles(x, tri,L):
+    """
+    Find angles that make up each triangle in the triangulation. By convention, column i defines the angle
+    corresponding to cell centroid i
+
+    :param x: Cell centroids (n_c x 2) np.float32 array
+    :param tri: Triangulation (n_v x 3) np.int32 array
+    :param L: Domain size (np.float32)
+    :return: tri_angles (n_v x 3) np.flaot32 array (in radians)
+    """
     three = np.array([0,1,2])
     i_b = np.mod(three + 1, 3)
     i_c = np.mod(three + 2, 3)
@@ -827,61 +678,19 @@ def tri_angles(x, tri,L):
     Angles = np.arccos(cos_Angles)
     return Angles
 
-
-@jit(nopython=True,cache=True)
-def equiangulate(x, tri, v_neighbours,L):
-    three = np.array([0,1,2])
-    nv = tri.shape[0]
-    no_flips = False
-    Angles = tri_angles(x, tri,L)
-    while no_flips is False:
-        flipped = 0
-        for i in range(nv):
-            for k in range(3):
-                neighbour = v_neighbours[i, k]
-                if neighbour > i:
-                    k2 = ((v_neighbours[neighbour] == i)* three).sum()
-                    theta = Angles[i, k] + Angles[neighbour, k2]
-                    if theta > np.pi:
-                        flipped += 1
-                        tri[i, np.mod(k + 2, 3)] = tri[neighbour, k2]
-                        tri[neighbour, np.mod(k2 + 2, 3)] = tri[i, k]
-                        v_neighbours = get_neighbours_j(tri, v_neighbours, [i, neighbour])
-                        new_tris = np.empty((2,3),dtype=np.int32)
-                        new_tris[0],new_tris[1] = tri[i],tri[neighbour]
-                        new_angles = tri_angles(x, new_tris,L)
-                        Angles[i] = new_angles[0]
-                        Angles[neighbour] = new_angles[1]
-        no_flips = flipped == 0
-    return tri,v_neighbours
-
-
-@jit(nopython=True,cache=True)
-def equiangulate2(x, tri, v_neighbours,L):
-    three = np.array([0,1,2])
-    nv = tri.shape[0]
-    no_flips = False
-    Angles = tri_angles(x, tri,L)
-    while no_flips is False:
-        flipped = 0
-        for i in range(nv):
-            for k in range(3):
-                neighbour = v_neighbours[i, k]
-                if neighbour > i:
-                    k2 = ((v_neighbours[neighbour] == i)* three).sum()
-                    theta = Angles[i, k] + Angles[neighbour, k2]
-                    if theta > np.pi:
-                        flipped += 1
-                        tri[i, np.mod(k + 2, 3)] = tri[neighbour, k2]
-                        tri[neighbour, np.mod(k2 + 2, 3)] = tri[i, k]
-                        v_neighbours = get_neighbours(tri)
-        no_flips = flipped == 0
-    return tri,v_neighbours
-
-
-
 @jit(nopython=True,cache=True)
 def get_k2(tri, v_neighbours):
+    """
+    To determine whether a given neighbouring pair of triangles needs to be re-triangulated, one considers the sum of
+    the pair angles of the triangles associated with the cell centroids that are **not** themselves associated with the
+    adjoining edge. I.e. these are the **opposite** angles.
+
+    Given one cell centroid/angle in a given triangulation, k2 defines the column index of the cell centroid/angle in the **opposite** triangle
+
+    :param tri: Triangulation (n_v x 3) np.int32 array
+    :param v_neighbours: Neighbourhood matrix (n_v x 3) np.int32 array
+    :return:
+    """
     three = np.array([0, 1, 2])
     nv = tri.shape[0]
     k2s = np.empty((nv, 3), dtype=np.int32)
@@ -894,6 +703,13 @@ def get_k2(tri, v_neighbours):
 
 @jit(nopython=True,cache=True)
 def make_y(x,Lgrid_xy):
+    """
+    Makes the (9) tiled set of coordinates used to perform the periodic triangulation.
+
+    :param x: Cell centroids (n_c x 2) np.float32 array
+    :param Lgrid_xy: (9 x 2) array defining the displacement vectors for each of the 9 images of the tiling
+    :return: Tiled set of coordinates (9n_c x 2) np.float32 array
+    """
     n_c = x.shape[0]
     y = np.empty((n_c*9,x.shape[1]))
     for k in range(9):
@@ -903,6 +719,17 @@ def make_y(x,Lgrid_xy):
 
 @jit(nopython=True,cache=True)
 def get_A_periodic(vs,neighbours,Cents,CV_matrix,L,n_c):
+    """
+    Calculates area of each cell (considering periodic boundary conditions)
+
+    :param vs: (nv x 2) matrix considering coordinates of each vertex
+    :param neighbours: (nv x 3 x 2) matrix considering the coordinates of each neighbouring vertex of each vertex
+    :param Cents: (nv x 3 x 2) array considering cell centroids of each cell involved in each triangulation
+    :param CV_matrix: cell-vertex binary matrix (n_c x n_v x 3) (where the 3rd dimension prescribes the order)
+    :param L: Domain size np.float32
+    :param n_c: Number of cells (np.int32)
+    :return: self.A saves the areas of each cell
+    """
     AA_mat = np.empty((neighbours.shape[0], neighbours.shape[1]))
     for i in range(3):
         Neighbours = np.remainder(neighbours[:, np.mod(i + 2, 3)] - Cents[:, i] + L / 2, L)
@@ -916,6 +743,16 @@ def get_A_periodic(vs,neighbours,Cents,CV_matrix,L,n_c):
 
 @jit(nopython=True,cache=True)
 def get_P_periodic(vs,neighbours,CV_matrix,L,n_c):
+    """
+    Finds perimeter of each cell (given periodic boundary conditions)
+
+    :param vs: (nv x 2) matrix considering coordinates of each vertex
+    :param neighbours: (nv x 3 x 2) matrix considering the coordinates of each neighbouring vertex of each vertex
+    :param CV_matrix: cell-vertex binary matrix (n_c x n_v x 3) (where the 3rd dimension prescribes the order)
+    :param L: Domain size np.float32
+    :param n_c: Number of cells (np.int32)
+    :return: P (n_c x 1) np.float32 array of perimeters for each cell
+    """
     P_m = np.empty((neighbours.shape[0], neighbours.shape[1]))
     for i in range(3):
         Neighbours = np.remainder(neighbours[:, i] - vs + L / 2, L) - L / 2
@@ -1001,24 +838,3 @@ def get_F_periodic(vs, neighbours,tris,CV_matrix,n_v,n_c,L,J_CW,J_CCW,A,P,X,kapp
 
     return F
 
-
-#
-# @jit(nopython=True,cache=True)
-# def make_M(DHDR,n_v,kappa_A,kappa_P,vA,vP,A0,P0,zet1,zet2,zet3):
-#     M = np.zeros((2, n_v, 2, 3))
-#     for i in range(3):
-#         for j in range(3):
-#             for Fdim in range(2):
-#                 M[:, :, Fdim, i] += DHDR[:, i, Fdim].T * (kappa_A * (vA[:, j] - A0) * zet1[:, j].T +
-#                                                             kappa_P * (vP[:, j]-P0) * zet2[:, j].T + zet3[:,j].T)
-#     M_out = M[0] + M[1]
-#     return M_out
-#
-#
-# @jit(nopython=True,cache=True)
-# def compile_cell_forces(CV_matrix,M_sum,n_c):
-#     dEdr = np.zeros((n_c, 2))
-#     for i in range(3):
-#         dEdr += np.asfortranarray(CV_matrix[:, :, i])@np.asfortranarray(M_sum[:, :, i])
-#     F = -dEdr
-#     return F
