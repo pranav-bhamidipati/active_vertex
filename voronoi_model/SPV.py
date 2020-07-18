@@ -13,11 +13,8 @@ vor.eta = 1e-2
 vor.kappa_A = 0.2
 vor.kappa_P = 0.2
 
-vor.set_t_span(0.01,1)
-vor.simulate_periodic()
-
-%timeit vor.get_F_periodic(vor.neighbours,vor.vs)
-%timeit vor._get_F_periodic(vor.neighbours,vor.vs)
+vor.set_t_span(0.01,80)
+vor.simulate()
 
 vor.get_self_self()
 fig, ax = plt.subplots()
@@ -28,9 +25,8 @@ fig.savefig("self_self.pdf")
 vor.animate(n_frames=30)
 #
 # @jit(nopython=True)
-# def fun(A,tris):
-#     return A[tris.ravel()].reshape(tris.shape)
+# def fun(x,tris):
+#     return np.dstack((x[:,0][tris.ravel()].reshape(tris.shape),x[:,1][tris.ravel()].reshape(tris.shape)))
 #
-# %timeit fun(vor.A,vor.tris)
-# %timeit vor.A[vor.tris]
-
+# %timeit fun(vor.x,vor.tris)
+# %timeit vor.x[vor.tris]
