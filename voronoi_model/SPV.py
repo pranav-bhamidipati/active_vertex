@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 vor = Tissue()
 vor.generate_cells(100)
 vor.make_init(9)
-vor.set_interaction(W = 0.16*np.array([[0, -0.5], [-0.5, 0]]),pE=0)
+vor.set_interaction(W = -0.08*np.array([[0, 1], [1, 0]]),pE=0.5)
 
 vor.A0 = 0.86
 vor.P0 = 3.12
