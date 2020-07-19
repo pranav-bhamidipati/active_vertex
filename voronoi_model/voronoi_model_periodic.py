@@ -109,8 +109,8 @@ class Tissue:
             :param noise: Gaussian noise added to {x,y} coordinates (np.float32)
             """
             self.L = L
-            self.x0 = self.hexagonal_lattice(int(np.ceil(self.L/0.5)),int(np.ceil(self.L/np.sqrt(3))),noise=noise)
-            self.x0 = self.x0[self.x0.max(axis=1) < L*0.95]
+            self.x0 = self.hexagonal_lattice(int(np.ceil(self.L/0.5)+1),int(np.ceil(self.L/np.sqrt(3))+1),noise=noise)
+            self.x0 = self.x0[self.x0.max(axis=1) < L*0.97]
             self.x = self.x0
             self.n_c = self.x0.shape[0]
 
@@ -341,11 +341,14 @@ class Tissue:
         def triangulate_periodic(self,x):
             Angles = tri_angles(x, self.tris, self.L)
             if type(self.k2s) is list:
-                self.k2s = get_k2(self.tris, self.v_neighbours)
                 self._triangulate_periodic(x)
+                self.k2s = get_k2(self.tris, self.v_neighbours)
             elif not ((Angles[self.v_neighbours, self.k2s] + Angles) < np.pi).all():
-                self.k2s = get_k2(self.tris, self.v_neighbours)
                 self._triangulate_periodic(x)
+                self.k2s = get_k2(self.tris, self.v_neighbours)
+            else:
+                self.vs = self.get_vertex_periodic(x,self.tris)
+                self.neighbours = self.vs[self.v_neighbours]
 
         def _triangulate_periodic(self,x):
             """
@@ -393,6 +396,8 @@ class Tissue:
 
             #5. Calculate vertex positions, the circumcentre of the three cells. See function doc-string for details
             V = self.get_vertex_periodic(x,n_tri)
+
+            # tri_same = (self.tris == n_tri).all()
 
             #6. Store outputs
             self.n_v = n_tri.shape[0]
