@@ -11,6 +11,8 @@ import math
 from matplotlib.patches import Polygon
 from matplotlib.collections import PatchCollection
 from matplotlib import cm
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 
 
 class Cell:
@@ -109,8 +111,8 @@ class Tissue:
             :param noise: Gaussian noise added to {x,y} coordinates (np.float32)
             """
             self.L = L
-            self.x0 = self.hexagonal_lattice(int(np.ceil(self.L/0.5)+1),int(np.ceil(self.L/np.sqrt(3))+1),noise=noise)
-            self.x0 = self.x0[self.x0.max(axis=1) < L*0.97]
+            self.x0 = self.hexagonal_lattice(int(np.ceil(self.L/0.5)),int(np.ceil(self.L/np.sqrt(3))),noise=noise)
+            self.x0 = self.x0[self.x0.max(axis=1) < L*0.95]
             self.x = self.x0
             self.n_c = self.x0.shape[0]
 
@@ -315,6 +317,9 @@ class Tissue:
                 # p.set_array(c_types_print)
                 ax.add_collection(p)
 
+        def generate_noise(self):
+            theta_noise = np.cumsum(np.random.normal(0, np.sqrt(2 * self.Dr * self.dt), (self.n_t, self.n_c)), axis=0)
+            self.noise = np.dstack((np.sin(theta_noise), np.sin(theta_noise)))
 
         def remove_repeats(self,tri,n_c):
             """
@@ -430,8 +435,8 @@ class Tissue:
             :param vs: (nv x 2) matrix considering coordinates of each vertex
             :return: self.A saves the areas of each cell
             """
-            Cents = np.array([(self.CV_matrix.T * self.x[:, 0]).sum(axis=-1),(self.CV_matrix.T * self.x[:, 1]).sum(axis=-1)]).T
-            self.A = get_A_periodic(vs, neighbours, Cents, self.CV_matrix, self.L, self.n_c)
+            self.Cents = np.array([(self.CV_matrix.T * self.x[:, 0]).sum(axis=-1),(self.CV_matrix.T * self.x[:, 1]).sum(axis=-1)]).T
+            self.A = get_A_periodic(vs, neighbours, self.Cents, self.CV_matrix, self.L, self.n_c)
             return self.A
 
         def get_F_periodic(self,neighbours,vs):
@@ -447,8 +452,10 @@ class Tissue:
             :param vs:
             :return:
             """
-            J_CCW = self.J[self.tris, roll_forward(self.tris)]
-            J_CW = self.J[self.tris, roll_reverse(self.tris)]
+            # J_CCW = self.J[self.tris, roll_forward(self.tris)]
+            # J_CW = self.J[self.tris, roll_reverse(self.tris)]
+            J_CW = self.J[self.tris, roll_forward(self.tris)]
+            J_CCW = self.J[self.tris, roll_reverse(self.tris)]
             X = self.x[self.tris]
             F = get_F_periodic(vs, neighbours, self.tris, self.CV_matrix, self.n_v, self.n_c, self.L, J_CW, J_CCW, self.A, self.P, X, self.kappa_A, self.kappa_P, self.A0, self.P0)
             return F
@@ -472,6 +479,7 @@ class Tissue:
             self.x = x.copy()
             self.x_save = np.zeros((n_t,self.n_c,2))
             self.tri_save = np.zeros((n_t,self.tris.shape[0],3),dtype=np.int32)
+            self.generate_noise()
             for i in range(n_t):
                 if i % print_every == 0:
                     print(i / n_t * 100, "%")
@@ -481,8 +489,8 @@ class Tissue:
                 self.get_A_periodic(self.neighbours,self.vs)
                 self.get_P_periodic(self.neighbours,self.vs)
                 F = self.get_F_periodic(self.neighbours,self.vs)
-                self.F = F
-                x += self.dt*(F + np.random.normal(0,np.sqrt(self.eta/self.dt),(self.n_c,2)))
+                F_soft = weak_repulsion(self.Cents,self.a,self.k, self.CV_matrix,self.n_c)
+                x += self.dt*(F + F_soft + self.v0*self.noise[i])
                 x = np.mod(x,self.L)
                 self.x = x
                 self.x_save[i] = x
@@ -497,6 +505,66 @@ class Tissue:
                 C_types = self.c_types[tri]
                 C_self_self = (C_types-np.roll(C_types,1,axis=1))==0
                 self.self_self[i] = np.sum(C_self_self)/C_self_self.size
+
+        def get_self_self_by_cell(self):
+            """
+            Stores the percentage of self-self contacts (in self.self_self)
+            """
+            self.p_self_self = np.zeros(self.n_t)
+            self.p_self_self_t = np.zeros((self.n_t,self.n_c))
+            for i, tri in enumerate(self.tri_save):
+                C_types = self.c_types[tri]
+                C_self_self = (C_types-np.roll(C_types,1,axis=1))==0
+                C_self_self = C_self_self*1.0 #+ np.roll(C_self_self,-1,axis=1)*1.0
+                c_self_self = np.zeros(self.n_c)
+                for j in range(3):
+                    c_self_self += np.dot(self.CV_matrix[:,:,j],C_self_self[:,j])
+                p_self_self = c_self_self/np.sum(self.CV_matrix,axis=(1,2))
+                self.p_self_self_t[i] = p_self_self
+                self.p_self_self[i] = p_self_self.mean()
+
+        def get_self_self_interface(self,nT = 100):
+            t_sel = np.linspace(0,self.n_t-1,nT).astype(int)
+
+            I,J = np.meshgrid(self.c_types,self.c_types,indexing="ij")
+            SS = (I==J)*1.0
+
+            self.self_self_interface = np.zeros((nT,self.n_c))
+            self.total_interface_length = np.zeros(nT)
+            for j, t in enumerate(t_sel):
+                x = self.x_save[t]
+                self._triangulate_periodic(x)
+                self.assign_vertices()
+                SS_CCW = SS[self.tris, roll_reverse(self.tris)]
+                P = self.get_P_periodic(self.neighbours,self.vs)
+                h_j = np.empty((self.n_v, 3, 2))
+                for i in range(3):
+                    h_j[:, i] = self.vs
+                h_jm1 = np.dstack((roll_forward(self.neighbours[:, :, 0]), roll_forward(self.neighbours[:, :, 1])))
+
+                l_jm1 = np.mod(h_j - h_jm1 + self.L / 2,self.L) - self.L / 2
+                l_jm1_norm = np.sqrt(l_jm1[:, :, 0] ** 2 + l_jm1[:, :, 1] ** 2)
+
+                self_self_length = SS_CCW * l_jm1_norm
+                c_ss_length = np.zeros(self.n_c)
+                for i in range(3):
+                    c_ss_length += np.dot(self.CV_matrix[:,:,i],self_self_length[:,i])
+                self.self_self_interface[j] = c_ss_length/P
+                self.total_interface_length[j] = P.sum() - c_ss_length.sum()
+            return self.self_self_interface[j], self.t_span[t_sel]
+
+        def get_num_islands(self,nT=100):
+            t_sel = np.linspace(0,self.n_t-1,nT).astype(int)
+            A_islands,B_islands = np.zeros(nT,dtype=np.int32),np.zeros(nT,dtype=np.int32)
+            for i, t in enumerate(t_sel):
+                tri = self.tri_save[t]
+                Adj = np.zeros((self.n_c,self.n_c),dtype=np.float32)
+                Adj[tri,np.roll(tri,-1,axis=1)] = 1
+                a_mask = ~self.c_types.astype(np.bool)
+                AdjA = Adj[a_mask][:, a_mask]
+                AdjB = Adj[~a_mask][:, ~a_mask]
+                A_islands[i],B_islands[i] = connected_components(csgraph=csr_matrix(AdjA), directed=False)[0],connected_components(csgraph=csr_matrix(AdjB), directed=False)[0]
+            return A_islands, B_islands
 
 
 
@@ -737,10 +805,9 @@ def get_A_periodic(vs,neighbours,Cents,CV_matrix,L,n_c):
     """
     AA_mat = np.empty((neighbours.shape[0], neighbours.shape[1]))
     for i in range(3):
-        Neighbours = np.remainder(neighbours[:, np.mod(i + 2, 3)] - Cents[:, i] + L / 2, L)
-        Vs = np.remainder(vs - Cents[:, i] + L / 2, L)
+        Neighbours = np.remainder(neighbours[:, np.mod(i + 2, 3)] - Cents[:, i] + L / 2, L) -L/2
+        Vs = np.remainder(vs - Cents[:, i] + L / 2, L) - L/2
         AA_mat[:, i] = 0.5 * (Neighbours[:, 0] * Vs[:, 1] - Neighbours[:, 1] * Vs[:, 0])
-
     A = np.zeros((n_c))
     for i in range(3):
         A += np.asfortranarray(CV_matrix[:, :, i])@np.asfortranarray(AA_mat[:, i])
@@ -796,19 +863,19 @@ def get_F_periodic(vs, neighbours,tris,CV_matrix,n_v,n_c,L,J_CW,J_CCW,A,P,X,kapp
     h_j = np.empty((n_v, 3, 2))
     for i in range(3):
         h_j[:, i] = vs
-    h_jp1 = np.dstack((roll_forward(neighbours[:,:,0]),roll_forward(neighbours[:,:,1])))
-    h_jm1 = np.dstack((roll_reverse(neighbours[:,:,0]),roll_reverse(neighbours[:,:,1])))
+    h_jm1 = np.dstack((roll_forward(neighbours[:,:,0]),roll_forward(neighbours[:,:,1])))
+    h_jp1 = np.dstack((roll_reverse(neighbours[:,:,0]),roll_reverse(neighbours[:,:,1])))
 
 
     dAdh_j = np.mod(h_jp1 - h_jm1 + L / 2, L) - L / 2
-    dAdh_j = np.dstack((dAdh_j[:,:,1],dAdh_j[:,:,0]))
+    dAdh_j = np.dstack((dAdh_j[:,:,1],-dAdh_j[:,:,0]))
 
     l_jm1 = np.mod(h_j - h_jm1 + L / 2, L) - L / 2
     l_jp1 = np.mod(h_j - h_jp1 + L / 2, L) - L / 2
     l_jm1_norm, l_jp1_norm = np.sqrt(l_jm1[:,:,0] ** 2 + l_jm1[:,:,1] ** 2), np.sqrt(l_jp1[:,:,0] ** 2 +  l_jp1[:,:,1] ** 2)
     dPdh_j = (l_jm1.T/l_jm1_norm.T + l_jp1.T/l_jp1_norm.T).T
 
-    dljidh_j = (l_jm1.T * J_CW.T/l_jm1_norm.T + l_jp1.T * J_CCW.T/l_jp1_norm.T).T
+    dljidh_j = (l_jm1.T * J_CCW.T/l_jm1_norm.T + l_jp1.T * J_CW.T/l_jp1_norm.T).T
 
 
     ## 3. Find areas and perimeters of the cells and restructure data wrt. the triangulation
@@ -842,4 +909,19 @@ def get_F_periodic(vs, neighbours,tris,CV_matrix,n_v,n_c,L,J_CW,J_CCW,A,P,X,kapp
     F = -dEdr
 
     return F
+
+@jit(nopython=True,cache=True)
+def weak_repulsion(Cents,a,k, CV_matrix,n_c):
+    CCW = np.dstack((roll_reverse(Cents[:,:,0]),roll_reverse(Cents[:,:,1])))#np.column_stack((Cents[:,1:3],Cents[:,0].reshape(-1,1,2)))
+    displacement = Cents - CCW
+    rij = np.sqrt(displacement[:,:,0]**2 + displacement[:,:,1]**2)
+    norm_disp = (displacement.T/rij.T).T
+    V_soft_mag = -k*(rij - 2*a)*(rij<2*a)
+    V_soft_CCW = (V_soft_mag.T*norm_disp.T).T
+    V_soft_CW = -(roll_forward(V_soft_mag).T*norm_disp.T).T
+    V_soft = V_soft_CW + V_soft_CCW
+    F_soft = np.zeros((n_c, 2))
+    for i in range(3):
+        F_soft += np.asfortranarray(CV_matrix[:, :, i])@np.asfortranarray(V_soft[:, i])
+    return F_soft
 
