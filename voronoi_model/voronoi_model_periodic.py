@@ -317,6 +317,47 @@ class Tissue:
                 # p.set_array(c_types_print)
                 ax.add_collection(p)
 
+
+        def plot_vor_colored(self,x,ax,cmap):
+            """
+            Plot the Voronoi.
+
+            Takes in a set of cell locs (x), tiles these 9-fold, plots the full voronoi, then crops to the field-of-view
+
+            :param x: Cell locations (nc x 2)
+            :param ax: matplotlib axis
+            """
+
+            L = self.L
+            grid_x, grid_y = np.mgrid[-1:2, -1:2]
+            grid_x[0, 0], grid_x[1, 1] = grid_x[1, 1], grid_x[0, 0]
+            grid_y[0, 0], grid_y[1, 1] = grid_y[1, 1], grid_y[0, 0]
+            y = np.vstack([x + np.array([i * L, j * L]) for i, j in np.array([grid_x.ravel(), grid_y.ravel()]).T])
+
+            cmap_print = np.tile(cmap.T,9).T
+            bleed = 0.1
+            cmap_print = cmap_print[(y<L*(1+bleed)).all(axis=1)+(y>-L*bleed).all(axis=1)]
+            y = y[(y<L*(1+bleed)).all(axis=1)+(y>-L*bleed).all(axis=1)]
+            regions, vertices = self.voronoi_finite_polygons_2d(Voronoi(y))
+
+
+            ax.set(aspect=1,xlim=(0,self.L),ylim=(0,self.L))
+            if type(self.c_types) is list:
+                # ax.scatter(x[:, 0], x[:, 1],color="grey",zorder=1000)
+                for region in regions:
+                    polygon = vertices[region]
+                    plt.fill(*zip(*polygon), alpha=0.4, color="grey")
+
+            else:
+                patches = []
+                for i, region in enumerate(regions):
+                    patches.append(Polygon(vertices[region], True,facecolor=cmap_print[i],edgecolor="white",alpha=0.5))
+
+                p = PatchCollection(patches, match_original=True)
+                # p.set_array(c_types_print)
+                ax.add_collection(p)
+
+
         def generate_noise(self):
             theta_noise = np.cumsum(np.random.normal(0, np.sqrt(2 * self.Dr * self.dt), (self.n_t, self.n_c)), axis=0)
             self.noise = np.dstack((np.sin(theta_noise), np.sin(theta_noise)))
@@ -496,6 +537,76 @@ class Tissue:
                 self.x_save[i] = x
             return self.x_save
 
+
+        def simulate_GRN(self,print_every=1000):
+            """
+            Evolve the SPV.
+
+            Stores:
+                self.x_save = Cell centroids for each time-step (n_t x n_c x 2), where n_t is the number of time-steps
+                self.tri_save = Triangulation for each time-step (n_t x n_v x 3)
+
+
+            :param print_every: integer value to skip printing progress every "print_every" iterations.
+            :return: self.x_save
+            """
+            n_t = self.t_span.size
+            self.n_t = n_t
+            x = self.x0.copy()
+            self._triangulate_periodic(x)
+            self.x = x.copy()
+            self.x_save = np.zeros((n_t,self.n_c,2))
+            self.E_save = np.zeros((n_t,self.n_c))
+            E = self.Sender * self.sender_val
+            self.E_save[0] = E
+            i_past = int(self.dT / self.dt)
+            print(i_past)
+            self.tri_save = np.zeros((n_t,self.tris.shape[0],3),dtype=np.int32)
+            self.generate_noise()
+
+            for i in range(n_t):
+                if i % print_every == 0:
+                    print(i / n_t * 100, "%")
+                self.triangulate_periodic(x)
+                self.tri_save[i] = self.tris
+                self.assign_vertices()
+                self.get_A_periodic(self.neighbours,self.vs)
+                self.get_P_periodic(self.neighbours,self.vs)
+                F = self.get_F_periodic(self.neighbours,self.vs)
+                F_soft = weak_repulsion(self.Cents,self.a,self.k, self.CV_matrix,self.n_c)
+                x += self.dt*(F + F_soft + self.v0*self.noise[i])
+                x = np.mod(x,self.L)
+                self.x = x
+                self.x_save[i] = x
+
+
+                ##Simulate the GRN
+                if i <= i_past:
+                    E = self.GRN_step(self.E_save[0],E)*(~self.Sender*self.sender_val) + self.Sender * self.sender_val
+                else:
+                    E = self.GRN_step(self.E_save[i-i_past],E)*(~self.Sender*self.sender_val) + self.Sender * self.sender_val
+                self.E_save[i] = E
+            return self.x_save
+
+
+        def GRN_step(self,A_in,A):
+            """
+            Perform one time-step of the GRN simulation
+
+            Ebar_i = SUM_{j in adjoining edges of cell i} l_ij A_j/P_j
+            dA_i/dt = 1/tau*(E_bar_i^p/(E_bar_i^p + B0^p + (delT*A)^p))
+
+            :param A: vector of n_c, defining value of the variable A
+            :return: Output after one time-step
+            """
+            l_matrix = get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L)
+            E_bar = l_matrix@(A_in/self.P)
+            dtA = 1/self.tau * (self.leak +
+                                self.alpha*(E_bar**self.p)/(E_bar**self.p + self.K**self.p + (self.delT*A_in)**self.p)
+                                - A)
+            A_out = A + self.dt*dtA
+            return A_out
+
         def get_self_self(self):
             """
             Stores the percentage of self-self contacts (in self.self_self)
@@ -602,6 +713,49 @@ class Tissue:
                 file_name = "animation %d" % time.time()
             an = animation.FuncAnimation(fig, animate, frames=n_frames, interval=200)
             an.save("%s/%s.mp4" % (dir_name, file_name), writer=writer, dpi=264)
+
+        def normalize(self,x,xmin,xmax):
+            return (x-xmin)/(xmax-xmin)
+
+        def animate_GRN(self, n_frames=100, file_name=None, dir_name="plots"):
+            """
+            Animate the simulation, saving to an mp4 file.
+
+            Parameters
+            ----------
+            n_frames : int
+                Number of frames to animate. Spaced evenly throughout **x_save**
+
+            file_name : str
+                Name of the file. If **None** given, generates file-name based on the time of simulation
+
+            dir_name: str
+                Directory name to save the plot.
+
+
+            """
+            if not os.path.exists(dir_name):
+                os.makedirs(dir_name)
+            fig = plt.figure()
+            ax1 = fig.add_subplot(1, 1, 1)
+
+            skip = int((self.x_save.shape[0]) / n_frames)
+            E_sample = self.E_save[::skip]
+            E_min,E_max = E_sample.min(),E_sample.max()
+
+            def animate(i):
+                ax1.cla()
+                cmap = plt.cm.plasma(self.normalize(E_sample[i],E_min,E_max))
+                self.plot_vor_colored(self.x_save[skip * i], ax1,cmap)
+                ax1.set(aspect=1, xlim=(0, self.L), ylim=(0, self.L))
+
+            Writer = animation.writers['ffmpeg']
+            writer = Writer(fps=15, bitrate=1800)
+            if file_name is None:
+                file_name = "animation %d" % time.time()
+            an = animation.FuncAnimation(fig, animate, frames=n_frames, interval=200)
+            an.save("%s/%s.mp4" % (dir_name, file_name), writer=writer, dpi=264)
+
 
 @jit(nopython=True,cache=True)
 def dhdr_periodic(rijk_,vs,L):
@@ -925,3 +1079,15 @@ def weak_repulsion(Cents,a,k, CV_matrix,n_c):
         F_soft += np.asfortranarray(CV_matrix[:, :, i])@np.asfortranarray(V_soft[:, i])
     return F_soft
 
+@jit(nopython=True,cache=True)
+def get_l_interface(n_v,n_c, neighbours, vs, CV_matrix,L):
+    h_j = np.empty((n_v, 3, 2))
+    for i in range(3):
+        h_j[:, i] = vs
+    h_jp1 = np.dstack((roll_reverse(neighbours[:,:,0]),roll_reverse(neighbours[:,:,1])))
+    l = np.mod(h_j - h_jp1 + L/2,L) - L/2
+    l = np.sqrt(l[:,:,0]**2 + l[:,:,1]**2)
+    C = np.zeros((n_c,n_c),dtype=np.float32)
+    for i in range(3):
+        C+= np.asfortranarray(l[:,i]*CV_matrix[:,:,i])@np.asfortranarray(CV_matrix[:,:,np.mod(i+2,3)].T)
+    return C

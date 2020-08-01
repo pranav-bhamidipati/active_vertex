@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 vor = Tissue()
 vor.generate_cells(100)
-vor.make_init(15)
+vor.make_init(7)
 alpha = 0.08
 vor.set_interaction(W = alpha*np.array([[0, 1], [1, 0]]),pE=0.5)
 
@@ -21,6 +21,8 @@ vor.kappa_A = 0.2
 vor.kappa_P = 0.1
 vor.a = 0.3
 vor.k = 2
+
+
 
 
 vor.set_t_span(0.025,200)
