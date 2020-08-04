@@ -6,7 +6,6 @@ import time
 from scipy.spatial import Voronoi, voronoi_plot_2d
 import os
 from matplotlib import animation
-from line_profiler import LineProfiler
 import math
 from matplotlib.patches import Polygon
 from matplotlib.collections import PatchCollection
@@ -59,6 +58,9 @@ class Tissue:
             self.grid_y[0,0],self.grid_y[1,1] = self.grid_y[1,1],self.grid_y[0,0]
             self.grid_xy = np.array([self.grid_x.ravel(),self.grid_y.ravel()]).T
 
+            self.n_warmup_steps = 2000
+
+            self.l_save = []
             self.x_save = []
             self.tri_save = []
 
@@ -537,8 +539,45 @@ class Tissue:
                 self.x_save[i] = x
             return self.x_save
 
+        
+        def warmup_SPV(self, print_updates=True):
+            """
+            Warm up the SPV by evolving the SPV for n_warmup_steps steps before saving simulation data.
+            
+            """
+            
+            if print_updates:
+                print(f"Warming up SPV ({self.n_warmup_steps} steps)")
+            
+            self.n_t = self.n_warmup_steps
+            
+            x = self.x0.copy()
+            self._triangulate_periodic(x)
+            self.x = x.copy()
+            self.tri_save = np.zeros((self.n_warmup_steps,self.tris.shape[0],3),dtype=np.int32)
+            self.tri_save[0] = self.tris
+            self.generate_noise()
 
-        def simulate_GRN(self,print_every=1000):
+            for i in range(1, self.n_warmup_steps):
+                self.triangulate_periodic(x)
+                self.tri_save[i] = self.tris
+                self.assign_vertices()
+                self.get_A_periodic(self.neighbours,self.vs)
+                self.get_P_periodic(self.neighbours,self.vs)
+                F = self.get_F_periodic(self.neighbours,self.vs)
+                F_soft = weak_repulsion(self.Cents,self.a,self.k, self.CV_matrix,self.n_c)
+                x += self.dt*(F + F_soft + self.v0*self.noise[i])
+                x = np.mod(x,self.L)
+                self.x = x
+            
+            self.x0 = x.copy()
+            
+            if print_updates:
+                print("Warmup complete")
+            
+            return self.x0
+        
+        def simulate_GRN(self,print_every=1000, print_updates=True):
             """
             Evolve the SPV.
 
@@ -550,25 +589,32 @@ class Tissue:
             :param print_every: integer value to skip printing progress every "print_every" iterations.
             :return: self.x_save
             """
+            
+            # Warm up simulation
+            self.warmup_SPV(print_updates=print_updates)
+            
             n_t = self.t_span.size
             self.n_t = n_t
             x = self.x0.copy()
             self._triangulate_periodic(x)
             self.x = x.copy()
             self.x_save = np.zeros((n_t,self.n_c,2))
+            self.l_save = np.zeros((n_t, self.n_c, self.n_c))
+            self.tri_save = np.zeros((n_t,self.tris.shape[0],3),dtype=np.int32)
             self.E_save = np.zeros((n_t,self.n_c))
             E = self.Sender * self.sender_val
+            self.x_save[0] = self.x0.copy()
+            self.l_save[0] = get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L)
+            self.tri_save[0] = self.tris
             self.E_save[0] = E
             i_past = int(self.dT / self.dt)
-            print(i_past)
-            self.tri_save = np.zeros((n_t,self.tris.shape[0],3),dtype=np.int32)
             self.generate_noise()
 
-            for i in range(n_t):
-                if i % print_every == 0:
+            for i in range(n_t - 1):
+                if (print_updates) & (i % print_every) == 0:
                     print(i / n_t * 100, "%")
                 self.triangulate_periodic(x)
-                self.tri_save[i] = self.tris
+                self.tri_save[i + 1] = self.tris
                 self.assign_vertices()
                 self.get_A_periodic(self.neighbours,self.vs)
                 self.get_P_periodic(self.neighbours,self.vs)
@@ -577,19 +623,33 @@ class Tissue:
                 x += self.dt*(F + F_soft + self.v0*self.noise[i])
                 x = np.mod(x,self.L)
                 self.x = x
-                self.x_save[i] = x
+                self.x_save[i + 1] = x
+                self.l_save[i + 1] = get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L)
 
-
-                ##Simulate the GRN
+                # Simulate the GRN
                 if i <= i_past:
-                    E = self.GRN_step(self.E_save[0],E)*(~self.Sender*self.sender_val) + self.Sender * self.sender_val
+                    E = (
+                        self.GRN_step(self.E_save[0], E, self.l_save[0]) * ~self.Sender
+                        + self.Sender * self.sender_val
+                    )
                 else:
-                    E = self.GRN_step(self.E_save[i-i_past],E)*(~self.Sender*self.sender_val) + self.Sender * self.sender_val
-                self.E_save[i] = E
+                    E = (
+                        self.GRN_step(
+                            self.E_save[i - i_past], E, self.l_save[i - i_past]
+                        )
+                        * ~self.Sender
+                        + self.Sender * self.sender_val
+                    )
+                
+                self.E_save[i + 1] = E
+            
+            if print_updates:
+                print("Simulation complete.")
+            
             return self.x_save
 
 
-        def GRN_step(self,A_in,A):
+        def GRN_step(self, A_in, A, l_matrix):
             """
             Perform one time-step of the GRN simulation
 
@@ -599,7 +659,6 @@ class Tissue:
             :param A: vector of n_c, defining value of the variable A
             :return: Output after one time-step
             """
-            l_matrix = get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L)
             E_bar = l_matrix@(A_in/self.P)
             dtA = 1/self.tau * (self.leak +
                                 self.alpha*(E_bar**self.p)/(E_bar**self.p + self.K**self.p + (self.delT*A_in)**self.p)
@@ -700,6 +759,8 @@ class Tissue:
                 os.makedirs(dir_name)
             fig = plt.figure()
             ax1 = fig.add_subplot(1, 1, 1)
+            
+            print("Creating animation.")
 
             skip = int((self.x_save.shape[0])/n_frames)
             def animate(i):
