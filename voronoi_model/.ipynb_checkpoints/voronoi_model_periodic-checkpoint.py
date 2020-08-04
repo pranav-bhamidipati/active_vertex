@@ -503,50 +503,14 @@ class Tissue:
             F = get_F_periodic(vs, neighbours, self.tris, self.CV_matrix, self.n_v, self.n_c, self.L, J_CW, J_CCW, self.A, self.P, X, self.kappa_A, self.kappa_P, self.A0, self.P0)
             return F
 
-        def simulate(self,print_every=1000):
-            """
-            Evolve the SPV.
-
-            Stores:
-                self.x_save = Cell centroids for each time-step (n_t x n_c x 2), where n_t is the number of time-steps
-                self.tri_save = Triangulation for each time-step (n_t x n_v x 3)
-
-
-            :param print_every: integer value to skip printing progress every "print_every" iterations.
-            :return: self.x_save
-            """
-            n_t = self.t_span.size
-            self.n_t = n_t
-            x = self.x0.copy()
-            self._triangulate_periodic(x)
-            self.x = x.copy()
-            self.x_save = np.zeros((n_t,self.n_c,2))
-            self.tri_save = np.zeros((n_t,self.tris.shape[0],3),dtype=np.int32)
-            self.generate_noise()
-            for i in range(n_t):
-                if i % print_every == 0:
-                    print(i / n_t * 100, "%")
-                self.triangulate_periodic(x)
-                self.tri_save[i] = self.tris
-                self.assign_vertices()
-                self.get_A_periodic(self.neighbours,self.vs)
-                self.get_P_periodic(self.neighbours,self.vs)
-                F = self.get_F_periodic(self.neighbours,self.vs)
-                F_soft = weak_repulsion(self.Cents,self.a,self.k, self.CV_matrix,self.n_c)
-                x += self.dt*(F + F_soft + self.v0*self.noise[i])
-                x = np.mod(x,self.L)
-                self.x = x
-                self.x_save[i] = x
-            return self.x_save
-
-        
-        def warmup_SPV(self):
+        def warmup_SPV(self, print_updates=True):
             """
             Warm up the SPV by evolving the SPV for n_warmup_steps steps before saving simulation data.
             
             """
             
-            print(f"Warming up SPV ({self.n_warmup_steps} steps)")
+            if print_updates:
+                print(f"Warming up SPV ({self.n_warmup_steps} steps)")
             
             self.n_t = self.n_warmup_steps
             
@@ -571,11 +535,12 @@ class Tissue:
             
             self.x0 = x.copy()
             
-            print("Warmup complete")
+            if print_updates:
+                print("Warmup complete")
             
             return self.x0
         
-        def simulate_GRN(self,print_every=1000):
+        def simulate(self,print_every=1000, print_updates=False):
             """
             Evolve the SPV.
 
@@ -587,29 +552,24 @@ class Tissue:
             :param print_every: integer value to skip printing progress every "print_every" iterations.
             :return: self.x_save
             """
-            
             # Warm up simulation
-            self.warmup_SPV()
+            self.warmup_SPV(print_updates=print_updates)
             
             n_t = self.t_span.size
             self.n_t = n_t
             x = self.x0.copy()
             self._triangulate_periodic(x)
             self.x = x.copy()
-            self.x_save = np.zeros((n_t + 1,self.n_c,2))
-            self.l_save = np.zeros((n_t + 1, self.n_c, self.n_c))
-            self.tri_save = np.zeros((n_t + 1,self.tris.shape[0],3),dtype=np.int32)
-            self.E_save = np.zeros((n_t + 1,self.n_c))
-            E = self.Sender * self.sender_val
+            self.x_save = np.zeros((n_t,self.n_c,2))
+            self.l_save = np.zeros((n_t, self.n_c, self.n_c))
+            self.tri_save = np.zeros((n_t,self.tris.shape[0],3),dtype=np.int32)
             self.x_save[0] = self.x0.copy()
             self.l_save[0] = get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L)
             self.tri_save[0] = self.tris
-            self.E_save[0] = E
-            i_past = int(self.dT / self.dt)
             self.generate_noise()
 
-            for i in range(n_t):
-                if i % print_every == 0:
+            for i in range(n_t - 1):
+                if (print_updates) & (i % print_every) == 0:
                     print(i / n_t * 100, "%")
                 self.triangulate_periodic(x)
                 self.tri_save[i + 1] = self.tris
@@ -623,7 +583,61 @@ class Tissue:
                 self.x = x
                 self.x_save[i + 1] = x
                 self.l_save[i + 1] = get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L)
+            
+            if print_updates:
+                print("Simulation complete.")
+            
+            return self.x_save
 
+        
+        def simulate_GRN(self,print_every=1000, print_updates=True):
+            """
+            Evolve the SPV.
+
+            Stores:
+                self.x_save = Cell centroids for each time-step (n_t x n_c x 2), where n_t is the number of time-steps
+                self.tri_save = Triangulation for each time-step (n_t x n_v x 3)
+
+
+            :param print_every: integer value to skip printing progress every "print_every" iterations.
+            :return: self.x_save
+            """
+            
+            # Warm up simulation
+            self.warmup_SPV(print_updates=print_updates)
+            
+            n_t = self.t_span.size
+            self.n_t = n_t
+            x = self.x0.copy()
+            self._triangulate_periodic(x)
+            self.x = x.copy()
+            self.x_save = np.zeros((n_t,self.n_c,2))
+            self.l_save = np.zeros((n_t, self.n_c, self.n_c))
+            self.tri_save = np.zeros((n_t,self.tris.shape[0],3),dtype=np.int32)
+            self.E_save = np.zeros((n_t,self.n_c))
+            E = self.Sender * self.sender_val
+            self.x_save[0] = self.x0.copy()
+            self.l_save[0] = get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L)
+            self.tri_save[0] = self.tris
+            self.E_save[0] = E
+            i_past = int(self.dT / self.dt)
+            self.generate_noise()
+
+            for i in range(n_t - 1):
+                if (print_updates) & (i % print_every) == 0:
+                    print(i / n_t * 100, "%")
+                self.triangulate_periodic(x)
+                self.tri_save[i + 1] = self.tris
+                self.assign_vertices()
+                self.get_A_periodic(self.neighbours,self.vs)
+                self.get_P_periodic(self.neighbours,self.vs)
+                F = self.get_F_periodic(self.neighbours,self.vs)
+                F_soft = weak_repulsion(self.Cents,self.a,self.k, self.CV_matrix,self.n_c)
+                x += self.dt*(F + F_soft + self.v0*self.noise[i])
+                x = np.mod(x,self.L)
+                self.x = x
+                self.x_save[i + 1] = x
+                self.l_save[i + 1] = get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L)
 
                 # Simulate the GRN
                 if i <= i_past:
@@ -642,7 +656,8 @@ class Tissue:
                 
                 self.E_save[i + 1] = E
             
-            print("Simulation complete.")
+            if print_updates:
+                print("Simulation complete.")
             
             return self.x_save
 
@@ -1139,7 +1154,7 @@ def weak_repulsion(Cents,a,k, CV_matrix,n_c):
     return F_soft
 
 @jit(nopython=True,cache=True)
-def get_l_interface(n_v,n_c, neighbours, vs, CV_matrix,L):
+def get_l_interface(n_v, n_c, neighbours, vs, CV_matrix,L):
     h_j = np.empty((n_v, 3, 2))
     for i in range(3):
         h_j[:, i] = vs
