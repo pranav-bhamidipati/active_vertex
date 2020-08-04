@@ -1141,7 +1141,7 @@ def weak_repulsion(Cents,a,k, CV_matrix,n_c):
     return F_soft
 
 @jit(nopython=True,cache=True)
-def get_l_interface(n_v,n_c, neighbours, vs, CV_matrix,L):
+def get_l_interface(n_v, n_c, neighbours, vs, CV_matrix,L):
     h_j = np.empty((n_v, 3, 2))
     for i in range(3):
         h_j[:, i] = vs
