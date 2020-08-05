@@ -58,7 +58,7 @@ class Tissue:
             self.grid_y[0,0],self.grid_y[1,1] = self.grid_y[1,1],self.grid_y[0,0]
             self.grid_xy = np.array([self.grid_x.ravel(),self.grid_y.ravel()]).T
 
-            self.n_warmup_steps = 2000
+            self.n_warmup_steps = 1000
 
             self.l_save = []
             self.x_save = []
@@ -561,15 +561,15 @@ class Tissue:
             self._triangulate_periodic(x)
             self.x = x.copy()
             self.x_save = np.zeros((n_t,self.n_c,2))
-            self.l_save = np.zeros((n_t, self.n_c, self.n_c))
+            self.l_save = []
             self.tri_save = np.zeros((n_t,self.tris.shape[0],3),dtype=np.int32)
             self.x_save[0] = self.x0.copy()
-            self.l_save[0] = get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L)
+            self.l_save.append(get_l_interface2(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L))
             self.tri_save[0] = self.tris
             self.generate_noise()
 
             for i in range(n_t - 1):
-                if (print_updates) & (i % print_every) == 0:
+                if (print_updates) & ((i % print_every) == 0):
                     print(i / n_t * 100, "%")
                 self.triangulate_periodic(x)
                 self.tri_save[i + 1] = self.tris
@@ -582,9 +582,10 @@ class Tissue:
                 x = np.mod(x,self.L)
                 self.x = x
                 self.x_save[i + 1] = x
-                self.l_save[i + 1] = get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L)
+                self.l_save.append(get_l_interface2(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L))
             
             if print_updates:
+                print("100 %")
                 print("Simulation complete.")
             
             return self.x_save
@@ -612,19 +613,19 @@ class Tissue:
             self._triangulate_periodic(x)
             self.x = x.copy()
             self.x_save = np.zeros((n_t,self.n_c,2))
-            self.l_save = np.zeros((n_t, self.n_c, self.n_c))
+            self.l_save = []
             self.tri_save = np.zeros((n_t,self.tris.shape[0],3),dtype=np.int32)
             self.E_save = np.zeros((n_t,self.n_c))
             E = self.Sender * self.sender_val
             self.x_save[0] = self.x0.copy()
-            self.l_save[0] = get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L)
+            self.l_save.append(get_l_interface2(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L))
             self.tri_save[0] = self.tris
             self.E_save[0] = E
             i_past = int(self.dT / self.dt)
             self.generate_noise()
 
             for i in range(n_t - 1):
-                if (print_updates) & (i % print_every) == 0:
+                if (print_updates) & ((i % print_every) == 0):
                     print(i / n_t * 100, "%")
                 self.triangulate_periodic(x)
                 self.tri_save[i + 1] = self.tris
@@ -637,7 +638,7 @@ class Tissue:
                 x = np.mod(x,self.L)
                 self.x = x
                 self.x_save[i + 1] = x
-                self.l_save[i + 1] = get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L)
+                self.l_save.append(get_l_interface2(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L))
 
                 # Simulate the GRN
                 if i <= i_past:
@@ -657,6 +658,7 @@ class Tissue:
                 self.E_save[i + 1] = E
             
             if print_updates:
+                print("100 %")
                 print("Simulation complete.")
             
             return self.x_save
@@ -1165,3 +1167,6 @@ def get_l_interface(n_v, n_c, neighbours, vs, CV_matrix,L):
     for i in range(3):
         C+= np.asfortranarray(l[:,i]*CV_matrix[:,:,i])@np.asfortranarray(CV_matrix[:,:,np.mod(i+2,3)].T)
     return C
+
+def get_l_interface2(*args, **kwargs):
+    return csr_matrix(get_l_interface(*args, **kwargs))
