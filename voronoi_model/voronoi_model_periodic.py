@@ -852,7 +852,7 @@ class Tissue:
             """
             np.savez(fname, **{str(step): csr for step, csr in zip(range(self.n_t), self.l_save)})
 
-        def save_all(self, to_dir, prefix, index=index, df_kwargs=dict(), csv_kwargs=dict()):
+        def save_all(self, to_dir, prefix, index=False, df_kwargs=dict(), csv_kwargs=dict()):
             if not os.path.exists(to_dir):
                 os.mkdir(to_dir)
 
