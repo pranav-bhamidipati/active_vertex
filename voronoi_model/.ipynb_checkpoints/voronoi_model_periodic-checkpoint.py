@@ -564,7 +564,7 @@ class Tissue:
             self.l_save = []
             self.tri_save = np.zeros((n_t,self.tris.shape[0],3),dtype=np.int32)
             self.x_save[0] = self.x0.copy()
-            self.l_save.append(get_l_interface2(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L))
+            self.l_save.append(get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L))
             self.tri_save[0] = self.tris
             self.generate_noise()
 
@@ -582,7 +582,7 @@ class Tissue:
                 x = np.mod(x,self.L)
                 self.x = x
                 self.x_save[i + 1] = x
-                self.l_save.append(get_l_interface2(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L))
+                self.l_save.append(get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L))
             
             if print_updates:
                 print("100 %")
@@ -618,7 +618,7 @@ class Tissue:
             self.E_save = np.zeros((n_t,self.n_c))
             E = self.Sender * self.sender_val
             self.x_save[0] = self.x0.copy()
-            self.l_save.append(get_l_interface2(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L))
+            self.l_save.append(get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L))
             self.tri_save[0] = self.tris
             self.E_save[0] = E
             i_past = int(self.dT / self.dt)
@@ -638,7 +638,7 @@ class Tissue:
                 x = np.mod(x,self.L)
                 self.x = x
                 self.x_save[i + 1] = x
-                self.l_save.append(get_l_interface2(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L))
+                self.l_save.append(get_l_interface(self.n_v, self.n_c, self.neighbours, self.vs, self.CV_matrix, self.L))
 
                 # Simulate the GRN
                 if i <= i_past:
@@ -831,6 +831,33 @@ class Tissue:
                 file_name = "animation %d" % time.time()
             an = animation.FuncAnimation(fig, animate, frames=n_frames, interval=200)
             an.save("%s/%s.mp4" % (dir_name, file_name), writer=writer, dpi=264)
+
+        def save_cells(self, fname, index=False, df_kwargs=dict(), csv_kwargs=dict()):
+            """Store cell centroid coordinates to csv with unique IDs"""
+            data = dict(
+                step      = np.repeat(np.arange(self.n_t), self.n_c),
+                time      = np.repeat(self.t_span, self.n_c),
+                unique_ID = np.tile(init_uIDs(self.n_c), self.n_t),
+            )
+
+            coords = ('X_coord', 'Y_coord', 'Z_coord')
+            for i in range(self.x.shape[1]):
+                data[coords[i]] = self.X_save[:, :, i].flatten()
+
+            pd.DataFrame(data, **df_kwargs).to_csv(fname, index=index, **csv_kwargs)
+
+        def save_l_mtx(self, fname):
+            """
+            Save l_mtx (interface lengths between cells) to zipped file fname.npz
+            """
+            np.savez(fname, **{str(step): csr for step, csr in zip(range(self.n_t), self.l_save)})
+
+        def save_all(self, to_dir, prefix, index=index, df_kwargs=dict(), csv_kwargs=dict()):
+            if not os.path.exists(to_dir):
+                os.mkdir(to_dir)
+
+            self.save_cells(os.path.join(to_dir, prefix + "_cell_coords.csv"), index=index, df_kwargs=df_kwargs, csv_kwargs=kwargs)
+            self.save_l_mtx(os.path.join(to_dir, prefix + "_l_mtx.npz"))
 
 
 @jit(nopython=True,cache=True)
@@ -1156,7 +1183,7 @@ def weak_repulsion(Cents,a,k, CV_matrix,n_c):
     return F_soft
 
 @jit(nopython=True,cache=True)
-def get_l_interface(n_v, n_c, neighbours, vs, CV_matrix,L):
+def get_l_interface_dense(n_v, n_c, neighbours, vs, CV_matrix,L):
     h_j = np.empty((n_v, 3, 2))
     for i in range(3):
         h_j[:, i] = vs
@@ -1168,5 +1195,23 @@ def get_l_interface(n_v, n_c, neighbours, vs, CV_matrix,L):
         C+= np.asfortranarray(l[:,i]*CV_matrix[:,:,i])@np.asfortranarray(CV_matrix[:,:,np.mod(i+2,3)].T)
     return C
 
-def get_l_interface2(*args, **kwargs):
-    return csr_matrix(get_l_interface(*args, **kwargs))
+def get_l_interface(*args, **kwargs):
+    return csr_matrix(get_l_interface_dense(*args, **kwargs))
+
+def init_uIDs(n, IDsep=":", IDfill="-"):
+    """
+    Returns a Numpy array of unique ID strings for n cells, at the start of a time-course. 
+    The ID consists of 3 components:
+    1) Lineage: The first 3 digits are the lineage of the cell. Each of the n cells is 
+        treated as a separate lineage at the start of the time-course.
+    2) Generation: The next 2 digits are the generation number of the cell (how many 
+        divisions it has undergone). This starts at 0 for all cells.
+    3) Tree: The last 15 digits are a sequence of binary digits encoding cell lineage. 
+        After a cell divides, its daughters enter generation #G. Each daughter is then
+        assigned either a 0 or a 1 at digit #G (eg. branches at generation 2 are 
+        encoded by the 2nd digit from the right).  
+    -  IDsep: the character separating each number
+    -  IDfill: If generation G has not arrived yet, this character fills the space.
+    """
+    
+    return np.array([IDsep.join([str(i).zfill(3), "00", IDfill * 15]) for i in range(n)])
