@@ -856,7 +856,7 @@ class Tissue:
             if not os.path.exists(to_dir):
                 os.mkdir(to_dir)
 
-            self.save_cells(os.path.join(to_dir, prefix + "_cell_coords.csv"), index=index, df_kwargs=df_kwargs, csv_kwargs=kwargs)
+            self.save_cells(os.path.join(to_dir, prefix + "_cell_coords.csv"), index=index, df_kwargs=df_kwargs, csv_kwargs=csv_kwargs)
             self.save_l_mtx(os.path.join(to_dir, prefix + "_l_mtx.npz"))
 
 
