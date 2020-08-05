@@ -12,7 +12,7 @@ from matplotlib.collections import PatchCollection
 from matplotlib import cm
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
-
+import pandas as pd
 
 class Cell:
     def __init__(self):

@@ -12,7 +12,7 @@ from matplotlib.collections import PatchCollection
 from matplotlib import cm
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
-
+import pandas as pd
 
 class Cell:
     def __init__(self):
@@ -842,7 +842,7 @@ class Tissue:
 
             coords = ('X_coord', 'Y_coord', 'Z_coord')
             for i in range(self.x.shape[1]):
-                data[coords[i]] = self.X_save[:, :, i].flatten()
+                data[coords[i]] = self.x_save[:, :, i].flatten()
 
             pd.DataFrame(data, **df_kwargs).to_csv(fname, index=index, **csv_kwargs)
 
