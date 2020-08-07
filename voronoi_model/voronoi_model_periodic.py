@@ -786,7 +786,7 @@ class Tissue:
             Writer = animation.writers['ffmpeg']
             writer = Writer(fps=15, bitrate=1800)
             if file_name is None:
-                file_name = "animation %d" % time.time()
+                file_name = "animation_%d" % time.time()
             an = animation.FuncAnimation(fig, animate, frames=n_frames, interval=200)
             an.save("%s/%s.mp4" % (dir_name, file_name), writer=writer, dpi=264)
 
@@ -822,8 +822,9 @@ class Tissue:
             def animate(i):
                 ax1.cla()
                 cmap = plt.cm.plasma(self.normalize(E_sample[i],E_min,E_max))
-                self.plot_vor_colored(self.x_save[skip * i], ax1,cmap)
+                self.plot_vor_colored(self.x_save[skip * i], ax1, cmap)
                 ax1.set(aspect=1, xlim=(0, self.L), ylim=(0, self.L))
+                ax1.set_title(f'time = {self.t_span[skip * i]}')
 
             Writer = animation.writers['ffmpeg']
             writer = Writer(fps=15, bitrate=1800)
@@ -841,11 +842,17 @@ class Tissue:
             )
 
             coords = ('X_coord', 'Y_coord', 'Z_coord')
-            for i in range(self.x.shape[1]):
+            for i in range(self.x_save.shape[2]):
                 data[coords[i]] = self.x_save[:, :, i].flatten()
 
             pd.DataFrame(data, **df_kwargs).to_csv(fname, index=index, **csv_kwargs)
 
+        
+        def save_cells2(self, fname, allow_pickle=False):
+            """Store cell centroid coordinates to binary Numpy format (.npy)"""
+            np.save(fname, self.x_save, allow_pickle=allow_pickle)
+        
+        
         def save_l_mtx(self, fname):
             """
             Save l_mtx (interface lengths between cells) to zipped file fname.npz
@@ -856,7 +863,8 @@ class Tissue:
             if not os.path.exists(to_dir):
                 os.mkdir(to_dir)
 
-            self.save_cells(os.path.join(to_dir, prefix + "_cell_coords.csv"), index=index, df_kwargs=df_kwargs, csv_kwargs=csv_kwargs)
+#             self.save_cells(os.path.join(to_dir, prefix + "_cell_coords.csv"), index=index, df_kwargs=df_kwargs, csv_kwargs=csv_kwargs)
+            self.save_cells2(os.path.join(to_dir, prefix + "_cell_coords.npy"))
             self.save_l_mtx(os.path.join(to_dir, prefix + "_l_mtx.npz"))
 
 
