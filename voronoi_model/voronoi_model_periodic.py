@@ -835,7 +835,7 @@ class Tissue:
                 cmap = plt.cm.plasma(self.normalize(E_sample[i],E_min,E_max))
                 self.plot_vor_colored(self.x_save[skip * i], ax1, cmap)
                 ax1.set(aspect=1, xlim=(0, self.L), ylim=(0, self.L))
-                ax1.set_title(f'time = {self.t_span[skip * i]}')
+                ax1.set_title(f'time = {self.t_span[skip * i]:.3f}')
 
             Writer = animation.writers['ffmpeg']
             writer = Writer(fps=15, bitrate=1800)
