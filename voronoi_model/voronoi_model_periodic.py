@@ -179,7 +179,7 @@ class Tissue:
             return self.t_span: Vector of times considered in the simulation (nt x 1)
             """
             
-            self.t_span = np.linspace(*args) * scale_factor
+            self.t_span = np.linspace(*args) * scaling_factor
             
             self.t0, self.tfin = self.t_span[0], self.t_span[-1]
             self.dt = self.t_span[1] - self.t_span[0]
