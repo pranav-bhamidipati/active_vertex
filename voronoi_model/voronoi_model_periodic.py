@@ -164,18 +164,29 @@ class Tissue:
             self.CV_matrix = CV_matrix
             return self.CV_matrix
 
-        def set_t_span(self,dt,tfin):
+        def set_t_span(self, *args, scaling_factor=1):
             """
-            Set the temporal running parameters
-
-            :param dt: Time-step (np.float32)
-            :param tfin: Final time-step (np.float32)
-            :return self.t_span: Vector of times considered in the simulation (nt x 1)
+            Set the temporal running parameters, optionally scaled to a time-scale 
+            external to the simulation.
+            
+            args                 : Arguments passed to np.linspace(). Should produce 
+                    time-points corresponding to the external time-scale
+            float scaling_factor : Quantity multiplied by external time-points to get 
+                    the corresponding simulation time-points 
+            
+            Returns
+            
+            return self.t_span: Vector of times considered in the simulation (nt x 1)
             """
-            self.dt, self.tfin = dt,tfin
-            self.t_span = np.arange(0,tfin,dt)
+            
+            self.t_span = np.linspace(*args) * scale_factor
+            
+            self.t0, self.tfin = self.t_span[0], self.t_span[-1]
+            self.dt = self.t_span[1] - self.t_span[0]
+            
             return self.t_span
 
+        
         def check_forces(self,x,F):
             """
             Plot the forces (quiver) on each cell (voronoi)
