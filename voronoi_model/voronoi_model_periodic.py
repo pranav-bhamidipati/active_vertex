@@ -783,23 +783,24 @@ class Tissue:
             """
             if not os.path.exists(dir_name):
                 os.makedirs(dir_name)
-            fig = plt.figure()
-            ax1 = fig.add_subplot(1, 1, 1)
             
-            print("Creating animation.")
+            with plt.figure() as fig:
+                ax1 = fig.add_subplot(1, 1, 1)
+            
+                print("Creating animation.")
 
-            skip = int((self.x_save.shape[0])/n_frames)
-            def animate(i):
-                ax1.cla()
-                self.plot_vor(self.x_save[skip*i],ax1)
-                ax1.set(aspect=1, xlim=(0, self.L), ylim=(0, self.L))
+                skip = int((self.x_save.shape[0])/n_frames)
+                def animate(i):
+                    ax1.cla()
+                    self.plot_vor(self.x_save[skip*i],ax1)
+                    ax1.set(aspect=1, xlim=(0, self.L), ylim=(0, self.L))
 
-            Writer = animation.writers['ffmpeg']
-            writer = Writer(fps=15, bitrate=1800)
-            if file_name is None:
-                file_name = "animation_%d" % time.time()
-            an = animation.FuncAnimation(fig, animate, frames=n_frames, interval=200)
-            an.save("%s/%s.mp4" % (dir_name, file_name), writer=writer, dpi=264)
+                Writer = animation.writers['ffmpeg']
+                writer = Writer(fps=15, bitrate=1800)
+                if file_name is None:
+                    file_name = "animation_%d" % time.time()
+                an = animation.FuncAnimation(fig, animate, frames=n_frames, interval=200)
+                an.save("%s/%s.mp4" % (dir_name, file_name), writer=writer, dpi=264)
 
         def normalize(self,x,xmin,xmax):
             return (x-xmin)/(xmax-xmin)
