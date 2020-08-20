@@ -13,6 +13,8 @@ from matplotlib import cm
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 import pandas as pd
+import tqdm
+import colorcet as cc
 
 class Cell:
     def __init__(self):
@@ -63,6 +65,8 @@ class Tissue:
             self.l_save = []
             self.x_save = []
             self.tri_save = []
+            
+            self.adh_coeff = 0
 
 
         def generate_cells(self,n_c):
@@ -118,7 +122,7 @@ class Tissue:
             self.x = self.x0
             self.n_c = self.x0.shape[0]
 
-        def set_interaction(self,W = 0.16*np.array([[2, 0.5], [0.5, 2]]),pE = 0.5):
+        def set_interaction(self, W = 0.16*np.array([[2, 0.5], [0.5, 2]]), pE = 0.5):
             nE = int(self.n_c*pE)
             N_dict = {"E": nE, "T": self.n_c - nE}
 
@@ -129,10 +133,12 @@ class Tissue:
                 c_types[j:j + j1] = k
                 j += j1
             np.random.shuffle(c_types)
-
+            
+            self.W = W
             cell_i, cell_j = np.meshgrid(c_types, c_types, indexing="ij")
             J = W[cell_i, cell_j]
             self.J = J
+            
             self.c_types = c_types
 
 
@@ -164,19 +170,41 @@ class Tissue:
             self.CV_matrix = CV_matrix
             return self.CV_matrix
 
-        def set_t_span(self, *args, scaling_factor=1):
+        def set_t_span(self, *args):
             """
             Set the temporal running parameters, optionally scaled to a time-scale 
             external to the simulation.
             
             args                 : Arguments passed to np.linspace(). Should produce 
                     time-points corresponding to the external time-scale
-            float scaling_factor : Quantity multiplied by external time-points to get 
-                    the corresponding simulation time-points 
-            
+
             Returns
             
-            return self.t_span: Vector of times considered in the simulation (nt x 1)
+            self.t_span          : Vector of times considered in the simulation (nt x 1)
+            """
+            
+            self.t_span = np.linspace(*args)
+            
+            self.t0, self.tfin = self.t_span[0], self.t_span[-1]
+            self.dt = self.t_span[1] - self.t_span[0]
+            
+            return self.t_span
+
+        
+        def set_GRN_t_span(self, *args, scaling_factor=1):
+            """
+            Set the temporal running parameters, optionally scaled to a time-scale 
+            external to the simulation.
+            
+            args                 : Arguments passed to np.linspace(). Should produce 
+                    time-points corresponding to the external time-scale
+            
+            float scaling_factor : Quantity multiplied by external time-points to get 
+                    the corresponding simulation time-points 
+
+            Returns
+            
+            self.t_span          : Vector of times considered in the simulation (nt x 1)
             """
             
             self.t_span = np.linspace(*args) * scaling_factor
@@ -184,8 +212,11 @@ class Tissue:
             self.t0, self.tfin = self.t_span[0], self.t_span[-1]
             self.dt = self.t_span[1] - self.t_span[0]
             
+            self.GRN_t_span = np.linspace(*args)
+            self.GRN_dt = self.GRN_t_span[1] - self.GRN_t_span[0]
+            
             return self.t_span
-
+        
         
         def check_forces(self,x,F):
             """
@@ -374,7 +405,18 @@ class Tissue:
         def generate_noise(self):
             theta_noise = np.cumsum(np.random.normal(0, np.sqrt(2 * self.Dr * self.dt), (self.n_t, self.n_c)), axis=0)
             self.noise = np.dstack((np.sin(theta_noise), np.sin(theta_noise)))
+            
+            def noise_gen():
+                i = 0
+                while True:
+                    yield self.noise[i]
+                    i = (i + 1) % self.noise.shape[0]
+            
+            self.noise_gen = noise_gen()
 
+        def get_noise(self):
+            return next(self.noise_gen)
+            
         def remove_repeats(self,tri,n_c):
             """
             For a given triangulation (nv x 3), remove repeated entries (i.e. rows)
@@ -492,7 +534,7 @@ class Tissue:
             self.Cents = np.array([(self.CV_matrix.T * self.x[:, 0]).sum(axis=-1),(self.CV_matrix.T * self.x[:, 1]).sum(axis=-1)]).T
             self.A = get_A_periodic(vs, neighbours, self.Cents, self.CV_matrix, self.L, self.n_c)
             return self.A
-
+        
         def get_F_periodic(self,neighbours,vs):
             """
             Calculate the forces acting on each cell via the SPV formalism.
@@ -513,7 +555,120 @@ class Tissue:
             X = self.x[self.tris]
             F = get_F_periodic(vs, neighbours, self.tris, self.CV_matrix, self.n_v, self.n_c, self.L, J_CW, J_CCW, self.A, self.P, X, self.kappa_A, self.kappa_P, self.A0, self.P0)
             return F
+        
+        
+        def assign_types_random(self, types, type_n_c,):
+            
+            types = np.array(types)
+            type_n_c = np.array(type_n_c)
+            assignments = [None] * len(types)
+            
+            if sum(type_n_c) < self.n_c:
+                assert (
+                    sum([x == -1 for x in type_n_c]) == 1
+                ), "Number of cells in type_n_c does not match the initial number of cells."
 
+                type_n_c[np.argwhere(type_n_c < 0)] = self.n_c - sum(type_n_c) - 1
+
+            elif sum(ct_count.values()) == n_points:
+                assert all(
+                    [val >= 0 for val in ct_count.values()]
+                ), "Number of cells in type_n_c does not match the initial number of cells."
+
+            else:
+                assert (
+                    False
+                ), "Number of cells in type_n_c does not match the initial number of cells."
+
+            idx = np.arange(self.n_c)
+            np.random.shuffle(idx)
+            
+            assignments = np.split(idx, np.cumsum(np.array(type_n_c)))[:-1]
+            
+            self.types = types
+            self.type_n_c = type_n_c
+            self.type_idx = assignments
+        
+        
+        def assign_types_center(self, types, type_n_c, center=0):
+            
+            types = np.array(types)
+            type_n_c = np.array(type_n_c)
+            assignments = [None] * len(types)
+            
+            if sum(type_n_c) < self.n_c:
+                assert (
+                    sum([x == -1 for x in type_n_c]) == 1
+                ), "Number of cells in type_n_c does not match the initial number of cells."
+
+                type_n_c[np.argwhere(type_n_c < 0)] = self.n_c - sum(type_n_c) - 1
+
+            elif sum(ct_count.values()) == n_points:
+                assert all(
+                    [val >= 0 for val in ct_count.values()]
+                ), "Number of cells in type_n_c does not match the initial number of cells."
+
+            else:
+                assert (
+                    False
+                ), "Number of cells in type_n_c does not match the initial number of cells."
+            
+            norm_coords = self.x_save[0] - np.mean(self.x_save[0], axis=0)
+            center_idx = np.argsort(np.linalg.norm(norm_coords, axis=1))[:type_n_c[center]]
+            assignments[center] = center_idx
+            
+            idx = np.arange(self.n_c)
+            idx = np.delete(idx, center_idx)
+            np.random.shuffle(idx)
+            
+            cumsum = 0
+            for i in range(len(types)):
+                if i == center:
+                    assignments[i] = center_idx
+                else:
+                    assignments[i] = idx[cumsum:cumsum + type_n_c[i]]
+                    cumsum += type_n_c[i]
+            
+            self.types = types
+            self.type_n_c = type_n_c
+            self.type_idx = assignments
+            
+        
+        def init_SPV(self):
+            
+            x = self.x0.copy()
+            self._triangulate_periodic(x)
+            self.x = x.copy()
+            self.generate_noise()
+            
+            return x
+        
+        def step_voronoi(self, x):
+            
+            self.triangulate_periodic(x)
+            self.assign_vertices()
+            self.get_A_periodic(self.neighbours,self.vs)
+            self.get_P_periodic(self.neighbours,self.vs)
+            F = self.get_F_periodic(self.neighbours,self.vs)
+            F_soft = weak_repulsion(self.Cents,self.a,self.k, self.CV_matrix,self.n_c)
+            x += self.dt*(F + F_soft + self.v0*self.get_noise())
+            x = np.mod(x,self.L)
+            self.x = x
+            
+            return x
+        
+        
+        def get_l_interface(self):
+            return get_l_interface(
+                self.n_v, 
+                self.n_c, 
+                self.neighbours, 
+                self.vs, 
+                self.CV_matrix, 
+                self.L
+            )
+        
+        
         def warmup_SPV(self, print_updates=True):
             """
             Warm up the SPV by evolving the SPV for n_warmup_steps steps before saving simulation data.
@@ -524,32 +679,57 @@ class Tissue:
                 print(f"Warming up SPV ({self.n_warmup_steps} steps)")
             
             self.n_t = self.n_warmup_steps
+            x = self.init_SPV()
             
-            x = self.x0.copy()
-            self._triangulate_periodic(x)
-            self.x = x.copy()
-            self.tri_save = np.zeros((self.n_warmup_steps,self.tris.shape[0],3),dtype=np.int32)
-            self.tri_save[0] = self.tris
-            self.generate_noise()
-
-            for i in range(1, self.n_warmup_steps):
-                self.triangulate_periodic(x)
-                self.tri_save[i] = self.tris
-                self.assign_vertices()
-                self.get_A_periodic(self.neighbours,self.vs)
-                self.get_P_periodic(self.neighbours,self.vs)
-                F = self.get_F_periodic(self.neighbours,self.vs)
-                F_soft = weak_repulsion(self.Cents,self.a,self.k, self.CV_matrix,self.n_c)
-                x += self.dt*(F + F_soft + self.v0*self.noise[i])
-                x = np.mod(x,self.L)
-                self.x = x
+            for _ in range(self.n_warmup_steps):
+                x = self.step_voronoi(x)
             
             self.x0 = x.copy()
+            self.n_t = self.t_span.size
+            self.generate_noise()
             
-            if print_updates:
-                print("Warmup complete")
+            self.x_save = np.zeros((self.n_t,self.n_c,2))
+            self.x_save[0] = self.x0.copy()
             
-            return self.x0
+            self.l_save = []
+            
+            self.l_save.append(self.get_l_interface())
+            
+            self.tri_save = np.zeros((self.n_t,self.tris.shape[0],3),dtype=np.int32)
+            self.tri_save[0] = self.tris
+            
+            return x
+        
+        
+        def simulate2(self,print_every=1000, progress_bar=False, print_updates=False):
+            """
+            Evolve the SPV.
+
+            Stores:
+                self.x_save = Cell centroids for each time-step (n_t x n_c x 2), where n_t is the number of time-steps
+                self.tri_save = Triangulation for each time-step (n_t x n_v x 3)
+
+
+            :param print_every: integer value to skip printing progress every "print_every" iterations.
+            :return: self.x_save
+            """
+            # Warm up simulation
+            x = self.warmup_SPV(print_updates=print_updates)
+
+            iterator = np.arange(1, self.n_t)
+            if progress_bar:
+                iterator = tqdm.tqdm(iterator)
+
+            for step in iterator:
+
+                x = self.step_voronoi(x)
+                
+                self.x_save[step] = x
+                self.l_save.append(self.get_l_interface())
+                self.tri_save[step] = self.tris
+            
+            return self.x_save
+        
         
         def simulate(self,print_every=1000, print_updates=False):
             """
@@ -600,7 +780,93 @@ class Tissue:
                 print("Simulation complete.")
             
             return self.x_save
-
+        
+        
+        def assign_types(self, types, type_n_c, init_vals, type_method="random", center=0):
+            
+            self.types = np.array(types)
+            self.type_n_c = np.array(type_n_c)
+            self.init_vals = np.array(init_vals)
+            self.center = center
+            
+            if type_method == "random":
+                self.assign_types_random(types, type_n_c)
+            
+            elif type_method == "center":
+                self.assign_types_center(types, type_n_c, center=center)
+            
+            
+        def init_GRN(self):
+            
+            E = np.empty(self.n_c)
+            for i, _ in enumerate(self.types):
+                E[self.type_idx[i]] = self.init_vals[i]
+            
+            self.E_save = np.empty((self.n_t, self.n_c))
+            self.E_save[0] = E
+            
+            return E
+        
+        
+        def step_GRN_delay(self, E, past_step, sender_idx=0):
+            
+            l_mtx = self.l_save[past_step]
+            transition_mtx = l_mtx.multiply(1/np.sum(l_mtx, axis=1))
+            
+            dE_dt = self.GRN_rhs(
+                E, 
+                self.E_save[past_step], 
+                transition_mtx,
+                self.args
+            )
+            dE_dt[self.type_idx[0]] = 0
+            
+            return np.maximum(0, E + dE_dt * self.GRN_dt)
+        
+        def simulate_morph_delay(
+            self, 
+            types, 
+            type_n_c, 
+            init_vals, 
+            type_method="random", 
+            center=0, 
+            progress_bar=False, 
+            print_updates=False, 
+        ):
+            
+            # Warm up simulation
+            x = self.warmup_SPV(print_updates=print_updates)
+            self.assign_types(
+                types, 
+                type_n_c, 
+                init_vals, 
+                type_method=type_method, 
+                center=center, 
+            )
+            E = self.init_GRN()
+            
+            max_delay = np.atleast_1d(self.delay).max()
+            step_delay = math.ceil(np.atleast_1d(self.delay) / self.GRN_dt)
+            
+            iterator = np.arange(1, self.n_t)
+            if progress_bar:
+                iterator = tqdm.tqdm(iterator)
+            
+            for step in iterator:
+                past_step = max(0, step - step_delay)
+                
+                x = self.step_voronoi(x)
+                E = self.step_GRN_delay(E, past_step)
+                
+                self.x_save[step] = x
+                self.l_save.append(self.get_l_interface())
+                self.tri_save[step] = self.tris
+                self.E_save[step] = E
+                
+                self.adh_prot = E
+                cell_i, cell_j = np.meshgrid(self.c_types, self.c_types, indexing="ij")
+                self.J = self.W[cell_i, cell_j] + self.adh_coeff * np.outer(self.adh_prot, self.adh_prot)
+                
         
         def simulate_GRN(self,print_every=1000, print_updates=True):
             """
@@ -761,10 +1027,9 @@ class Tissue:
                 AdjB = Adj[~a_mask][:, ~a_mask]
                 A_islands[i],B_islands[i] = connected_components(csgraph=csr_matrix(AdjA), directed=False)[0],connected_components(csgraph=csr_matrix(AdjB), directed=False)[0]
             return A_islands, B_islands
-
-
-
-        def animate(self,n_frames = 100,file_name=None, dir_name="plots"):
+        
+        
+        def animate(self, file_name=None, dir_name="plots", n_frames=100, fps=15, print_updates=True):
             """
             Animate the simulation, saving to an mp4 file.
 
@@ -779,32 +1044,41 @@ class Tissue:
             dir_name: str
                 Directory name to save the plot.
 
-
             """
             if not os.path.exists(dir_name):
                 os.makedirs(dir_name)
+            
             fig = plt.figure()
             ax1 = fig.add_subplot(1, 1, 1)
             
-            print("Creating animation.")
-
-            skip = int((self.x_save.shape[0])/n_frames)
-            def animate(i):
+            n_frames = min(n_frames, self.x_save.shape[0])
+            skip = math.floor(self.x_save.shape[0]/n_frames)
+            
+            def anim(i):
                 ax1.cla()
-                self.plot_vor(self.x_save[skip*i],ax1)
+                self.plot_vor(self.x_save[skip*i], ax1)
                 ax1.set(aspect=1, xlim=(0, self.L), ylim=(0, self.L))
+                ax1.set_title(f"time = {self.t_span[skip * i]:.1f}")
 
             Writer = animation.writers['ffmpeg']
-            writer = Writer(fps=15, bitrate=1800)
+            writer = Writer(fps=fps, bitrate=1800)
             if file_name is None:
                 file_name = "animation_%d" % time.time()
-            an = animation.FuncAnimation(fig, animate, frames=n_frames, interval=200)
-            an.save("%s/%s.mp4" % (dir_name, file_name), writer=writer, dpi=264)
+            an = animation.FuncAnimation(fig, anim, frames=n_frames)
+            
+            fname = "%s/%s.mp4" % (dir_name, file_name)
+            if print_updates:
+                print(f"Saving to {fname}")
+            
+            an.save(fname, writer=writer, dpi=264)
+            plt.close()
 
+            
         def normalize(self,x,xmin,xmax):
             return (x-xmin)/(xmax-xmin)
 
-        def animate_GRN(self, n_frames=100, file_name=None, dir_name="plots"):
+        
+        def animate_GRN(self, file_name=None, dir_name="plots", n_frames=100, fps=15, cmap = "CET_L8", print_updates=True):
             """
             Animate the simulation, saving to an mp4 file.
 
@@ -823,60 +1097,65 @@ class Tissue:
             """
             if not os.path.exists(dir_name):
                 os.makedirs(dir_name)
+            
             fig = plt.figure()
             ax1 = fig.add_subplot(1, 1, 1)
-
-            skip = int((self.x_save.shape[0]) / n_frames)
+            
+            n_frames = min(n_frames, self.x_save.shape[0])
+            skip = math.floor(self.x_save.shape[0]/n_frames)
+            
             E_sample = self.E_save[::skip]
-            E_min,E_max = E_sample.min(),E_sample.max()
-
-            def animate(i):
+            E_min,E_max = E_sample.min(), E_sample.max()
+            
+            def anim(i):
                 ax1.cla()
-                cmap = plt.cm.plasma(self.normalize(E_sample[i],E_min,E_max))
-                self.plot_vor_colored(self.x_save[skip * i], ax1, cmap)
+                colors = cc.cm[cmap](self.normalize(E_sample[i],E_min,E_max))
+                self.plot_vor_colored(self.x_save[skip * i], ax1, colors)
                 ax1.set(aspect=1, xlim=(0, self.L), ylim=(0, self.L))
-                ax1.set_title(f'time = {self.t_span[skip * i]:.3f}')
-
+                ax1.set_title(f"time = {self.GRN_t_span[skip * i]:.3f}")
+            
             Writer = animation.writers['ffmpeg']
-            writer = Writer(fps=15, bitrate=1800)
+            writer = Writer(fps=fps, bitrate=1800)
             if file_name is None:
-                file_name = "animation %d" % time.time()
-            an = animation.FuncAnimation(fig, animate, frames=n_frames, interval=200)
-            an.save("%s/%s.mp4" % (dir_name, file_name), writer=writer, dpi=264)
+                file_name = "animation_%d" % time.time()
+            an = animation.FuncAnimation(fig, anim, frames=n_frames)
+            
+            fname = "%s/%s.mp4" % (dir_name, file_name)
+            if print_updates:
+                print(f"Saving to {fname}")
+            
+            an.save(fname, writer=writer, dpi=264)
+            plt.close()
 
-        def save_cells(self, fname, index=False, df_kwargs=dict(), csv_kwargs=dict()):
-            """Store cell centroid coordinates to csv with unique IDs"""
-            data = dict(
-                step      = np.repeat(np.arange(self.n_t), self.n_c),
-                time      = np.repeat(self.t_span, self.n_c),
-                unique_ID = np.tile(init_uIDs(self.n_c), self.n_t),
-            )
 
-            coords = ('X_coord', 'Y_coord', 'Z_coord')
-            for i in range(self.x_save.shape[2]):
-                data[coords[i]] = self.x_save[:, :, i].flatten()
-
-            pd.DataFrame(data, **df_kwargs).to_csv(fname, index=index, **csv_kwargs)
-
-        
-        def save_cells2(self, fname, allow_pickle=False):
-            """Store cell centroid coordinates to binary Numpy format (.npy)"""
+        def save_cells(self, fname, allow_pickle=False):
+            """Store cell centroid coordinates to binary Numpy format (fname.npy)"""
             np.save(fname, self.x_save, allow_pickle=allow_pickle)
         
         
         def save_l_mtx(self, fname):
             """
-            Save l_mtx (interface lengths between cells) to zipped file fname.npz
+            Save l_mtx (interface lengths between cells) to zipped Numpy format fname.npz
             """
             np.savez(fname, **{str(step): csr for step, csr in zip(range(self.n_t), self.l_save)})
 
+        
+        def save_GRN(self, fname, allow_pickle=False):
+            """
+            Save GRN expression information to binary Numpy format (fname.npy)
+            """
+            np.save(fname, self.E_save, allow_pickle=allow_pickle)
+        
+        
         def save_all(self, to_dir, prefix, index=False, df_kwargs=dict(), csv_kwargs=dict()):
             if not os.path.exists(to_dir):
                 os.mkdir(to_dir)
 
-#             self.save_cells(os.path.join(to_dir, prefix + "_cell_coords.csv"), index=index, df_kwargs=df_kwargs, csv_kwargs=csv_kwargs)
-            self.save_cells2(os.path.join(to_dir, prefix + "_cell_coords.npy"))
+            self.save_cells(os.path.join(to_dir, prefix + "_cell_coords.npy"))
             self.save_l_mtx(os.path.join(to_dir, prefix + "_l_mtx.npz"))
+            
+            if hasattr(self, 'E_save'):
+                self.save_GRN(os.path.join(to_dir, prefix + "_GRN.npy"))
 
 
 @jit(nopython=True,cache=True)
@@ -1188,7 +1467,7 @@ def get_F_periodic(vs, neighbours,tris,CV_matrix,n_v,n_c,L,J_CW,J_CCW,A,P,X,kapp
 
 @jit(nopython=True,cache=True)
 def weak_repulsion(Cents,a,k, CV_matrix,n_c):
-    CCW = np.dstack((roll_reverse(Cents[:,:,0]),roll_reverse(Cents[:,:,1])))#np.column_stack((Cents[:,1:3],Cents[:,0].reshape(-1,1,2)))
+    CCW = np.dstack((roll_reverse(Cents[:,:,0]),roll_reverse(Cents[:,:,1])))
     displacement = Cents - CCW
     rij = np.sqrt(displacement[:,:,0]**2 + displacement[:,:,1]**2)
     norm_disp = (displacement.T/rij.T).T
