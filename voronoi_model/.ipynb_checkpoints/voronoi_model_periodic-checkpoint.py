@@ -1187,13 +1187,13 @@ def dhdr_periodic(rijk_,vs,L):
                 cx ** 2 + cy ** 2))) / (2. * ((ay - by) * cx + ax * (by - cy) + bx * (-ay + cy)) ** 2)
 
         #dhy/drx
-        DHDR[:, i, 1,0] = (bx ** 2 + by ** 2 - cx ** 2 + 2 * ax * (-bx + cx) - cy ** 2) / (
+        DHDR[:, i, 0,1] = (bx ** 2 + by ** 2 - cx ** 2 + 2 * ax * (-bx + cx) - cy ** 2) / (
                     2. * ((ay - by) * cx + ax * (by - cy) + bx * (-ay + cy))) - ((by - cy) * (
                     (bx ** 2 + by ** 2) * (ax - cx) + (ax ** 2 + ay ** 2) * (-bx + cx) + (-ax + bx) * (
                         cx ** 2 + cy ** 2))) / (2. * ((ay - by) * cx + ax * (by - cy) + bx * (-ay + cy)) ** 2)
 
         #dhx/dry
-        DHDR[:, i, 0, 1] = (-bx ** 2 - by ** 2 + cx ** 2 + 2 * ay * (by - cy) + cy ** 2) / (
+        DHDR[:, i, 1, 0] = (-bx ** 2 - by ** 2 + cx ** 2 + 2 * ay * (by - cy) + cy ** 2) / (
                 2. * ((ay - by) * cx + ax * (by - cy) + bx * (-ay + cy))) - ((-bx + cx) * (
                 (ax ** 2 + ay ** 2) * (by - cy) + (bx ** 2 + by ** 2) * (-ay + cy) + (ay - by) * (
                 cx ** 2 + cy ** 2))) / (2. * ((ay - by) * cx + ax * (by - cy) + bx * (-ay + cy)) ** 2)
@@ -1495,21 +1495,3 @@ def get_l_interface_dense(n_v, n_c, neighbours, vs, CV_matrix,L):
 
 def get_l_interface(*args, **kwargs):
     return csr_matrix(get_l_interface_dense(*args, **kwargs))
-
-def init_uIDs(n, IDsep=":", IDfill="-"):
-    """
-    Returns a Numpy array of unique ID strings for n cells, at the start of a time-course. 
-    The ID consists of 3 components:
-    1) Lineage: The first 3 digits are the lineage of the cell. Each of the n cells is 
-        treated as a separate lineage at the start of the time-course.
-    2) Generation: The next 2 digits are the generation number of the cell (how many 
-        divisions it has undergone). This starts at 0 for all cells.
-    3) Tree: The last 15 digits are a sequence of binary digits encoding cell lineage. 
-        After a cell divides, its daughters enter generation #G. Each daughter is then
-        assigned either a 0 or a 1 at digit #G (eg. branches at generation 2 are 
-        encoded by the 2nd digit from the right).  
-    -  IDsep: the character separating each number
-    -  IDfill: If generation G has not arrived yet, this character fills the space.
-    """
-    
-    return np.array([IDsep.join([str(i).zfill(3), "00", IDfill * 15]) for i in range(n)])

@@ -3,6 +3,7 @@ data/
 stan_output/
 
 voronoi_model/__pycache__/
+voronoi_model/.ipynb_checkpoints/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
