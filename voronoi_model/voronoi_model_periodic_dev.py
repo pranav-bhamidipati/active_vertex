@@ -16,6 +16,8 @@ import pandas as pd
 import tqdm
 import colorcet as cc
 
+from datetime import datetime
+now = datetime.now()
 
 class Cell:
     def __init__(self):
@@ -661,7 +663,12 @@ class Tissue:
                 self._triangulate_periodic(x)
                 self.k2s = get_k2(self.tris, self.v_neighbours)
             else:
-                mask = (self.Angles[self.v_neighbours, self.k2s] + self.Angles) < np.pi
+                with np.errstate(all='raise'):
+                    try:
+                        mask = (self.Angles[self.v_neighbours, self.k2s] + self.Angles) < np.pi
+                    except:
+                        print("OOPS:", now.strftime("%H:%M:%S"))
+                        mask = (self.Angles[self.v_neighbours, self.k2s] + self.Angles) < np.pi
                 if not mask.all():
                     self.equiangulate(x, mask)
                     # self._triangulate_periodic(x)
@@ -730,9 +737,21 @@ class Tissue:
                 self.k2s = get_k2(self.tris, self.v_neighbours)
                 mask[:] = True
             else:
-                mask = (self.Angles[self.v_neighbours, self.k2s] + self.Angles) < np.pi
+                with np.errstate(all='raise'):
+                    try:
+                        mask = (self.Angles[self.v_neighbours, self.k2s] + self.Angles) < np.pi
+                    except:
+                        print("WHOOPSIE:", now.strftime("%H:%M:%S"))
+                        print(f"""Is nan?
+                        self.Angles:{np.any(np.isnan(self.Angles))}
+                        self.v_neighbours:{np.any(np.isnan(self.v_neighbours))}
+                        self.k2s:{np.any(np.isnan(self.k2s))}
+                        """)
+                        mask = (self.Angles[self.v_neighbours, self.k2s] + self.Angles) < np.pi
+#                         print(self.Angles)
             k += 1
         if k == timeout:
+            print("timeout:", now.strftime("%H:%M:%S"))
             self._triangulate_periodic(x)
             self.k2s = get_k2(self.tris, self.v_neighbours)
 
@@ -893,6 +912,16 @@ class Tissue:
         J_CW = self.J[self.tris, roll_forward(self.tris)]
         J_CCW = self.J[self.tris, roll_reverse(self.tris)]
         F = get_F_periodic(vs, neighbours, self.tris, self.CV_matrix, self.n_v, self.n_c, self.L, J_CW, J_CCW, self.A, self.P, self.Cents, self.kappa_A, self.kappa_P, self.A0, self.P0)
+        J_CWnan = np.any(np.isnan(J_CW))
+        J_CCWnan = np.any(np.isnan(J_CCW))
+        Fnan = np.any(np.isnan(F))
+        if any([J_CWnan, J_CCWnan, Fnan]):
+            print(f"""get_F_periodic encountered nan:
+            nans?
+            {J_CWnan}
+            {J_CCWnan}
+            {Fnan}""")
+        
         return F
 
     def get_F_periodic_param(self, neighbours, vs):
@@ -1111,8 +1140,21 @@ class Tissue:
         F_soft = weak_repulsion(
             self.Cents, self.a, self.k, self.CV_matrix, self.n_c, self.L
         )
-        x += self.dt * (F + F_soft + self.v0 * self.get_noise())
-        x = np.mod(x, self.L)
+        n = self.get_noise()
+        x += self.dt * (F + F_soft + self.v0 * n)
+        with np.errstate(all='raise'):
+            try:
+                x = np.mod(x, self.L)
+            except:
+                print("OOPSIE:", now.strftime("%H:%M:%S"))
+                print(f"""F_get: {F_get.__name__}
+                Has nan?
+                F:               {np.any(np.isnan(F))}
+                self.neighbours: {np.any(np.isnan(self.neighbours))}
+                self.vs:         {np.any(np.isnan(self.vs))}
+                
+                """)
+                x = np.mod(x, self.L)
         self.x = x
 
         return x
