@@ -1451,7 +1451,44 @@ class Tissue:
                 connected_components(csgraph=csr_matrix(AdjB), directed=False)[0],
             )
         return A_islands, B_islands
-
+    
+    def get_num_boundaries(self, nT=100):
+        """
+        Get the number of islands, defined as contiguous regions of a given cell type.
+        Considers only cases where there are two cell types.
+        A_islands is the number of islands of cell_type == 0, and B_islands for cell_type == 1
+        :param nT: Number of time-steps to consider (evenly spaced)
+        :return: A_islands, B_islands
+        """
+        t_sel = np.linspace(0, self.n_t - 1, nT).astype(int)
+        num_boundaries = np.zeros(nT, dtype=np.int32)
+        for i, t in enumerate(t_sel):
+            tri = self.tri_save[t]
+            tri_types = self.c_types[tri]
+    
+            # Find heterotypic edges by comparing each cell with its CW neighbour in the triangulation
+            het_neighbours = tri_types != np.roll(tri_types, 1, axis=1)
+            v_neighbours = get_neighbours(tri)
+        
+            # For each triangle (i.e. vertex), find the corresponding neighbouring vertex that makes up the above heterotypic edges
+            het_v_neighbour_mask = np.roll(het_neighbours, 1, axis=1)
+            het_v_neighbours = v_neighbours[het_v_neighbour_mask]
+    
+            # Get the other vertex that makes up the edge (i.e. that of the triangle in question)
+            het_v = np.repeat(np.arange(self.n_v), 3).reshape((self.n_v, 3))[het_v_neighbour_mask]
+    
+            # Build an adjacency matrix of vertex pairs (i.e. edges) that are members of a boundary
+            Adj = np.zeros((self.n_v, self.n_v))
+            Adj[het_v, het_v_neighbours] = 1
+    
+            # Reduce the adjacency matrix to consider only vertices that are involved in a boundary
+            v_mask = (Adj.T @ np.ones(self.n_v)) != 0
+    
+            # Count the number of boundaries
+            num_boundaries[i] = connected_components(csgraph=csr_matrix(Adj[v_mask][:, v_mask]), directed=False)[0]
+    
+        return num_boundaries
+        
     def animate(
         self, file_name=None, dir_name="plots", n_frames=100, fps=15, print_updates=True
     ):
