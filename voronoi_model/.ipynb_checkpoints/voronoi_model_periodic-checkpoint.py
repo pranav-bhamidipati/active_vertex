@@ -10,6 +10,7 @@ import math
 from matplotlib.patches import Polygon
 from matplotlib.collections import PatchCollection
 from matplotlib import cm
+from IPython.display import HTML
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 import pandas as pd
@@ -77,25 +78,25 @@ class Tissue:
 
     def generate_cells(self, n_c):
         """
-            Generate the cells.
+        Generate the cells.
 
-            Saves **Cell** objects, which will be utilised later in the simulation.
-            :param n_c: number of cells (np.int32)
-            :return: self.cells, a list of **Cell** objects
-            """
+        Saves **Cell** objects, which will be utilised later in the simulation.
+        :param n_c: number of cells (np.int32)
+        :return: self.cells, a list of **Cell** objects
+        """
         self.n_c = n_c
         self.cells = [Cell() for i in range(n_c)]
         return self.cells
 
     def hexagonal_lattice(self, rows=3, cols=3, noise=0.0005):
         """
-            Assemble a hexagonal lattice
+        Assemble a hexagonal lattice
 
-            :param rows: Number of rows in lattice
-            :param cols: Number of columns in lattice
-            :param noise: Noise added to cell locs (Gaussian SD)
-            :return: points (nc x 2) cell coordinates.
-            """
+        :param rows: Number of rows in lattice
+        :param cols: Number of columns in lattice
+        :param noise: Noise added to cell locs (Gaussian SD)
+        :return: points (nc x 2) cell coordinates.
+        """
         points = []
         for row in range(rows * 2):
             for col in range(cols):
@@ -109,15 +110,15 @@ class Tissue:
 
     def make_init(self, L, noise=0.005):
         """
-            Make initial condition. Currently, this is a hexagonal lattice + noise
-            Makes reference to the self.hexagonal_lattice function, then crops down to the reference frame
-            Stores:
-                self.n_c = number of cells
-                self.x0 = (nc x 2) matrix denoting cell coordinates
-                self.x = clone of self.x0
-            :param L: Domain size/length (np.float32)
-            :param noise: Gaussian noise added to {x,y} coordinates (np.float32)
-            """
+        Make initial condition. Currently, this is a hexagonal lattice + noise
+        Makes reference to the self.hexagonal_lattice function, then crops down to the reference frame
+        Stores:
+            self.n_c = number of cells
+            self.x0 = (nc x 2) matrix denoting cell coordinates
+            self.x = clone of self.x0
+        :param L: Domain size/length (np.float32)
+        :param noise: Gaussian noise added to {x,y} coordinates (np.float32)
+        """
         self.L = L
         self.x0 = self.hexagonal_lattice(
             int(np.ceil(self.L / 0.5)), int(np.ceil(self.L / np.sqrt(3))), noise=noise
@@ -128,6 +129,55 @@ class Tissue:
         self.x0 = self.x0[self.x0.max(axis=1) < L * 0.97]
         self.x = self.x0
         self.n_c = self.x0.shape[0]
+        self.n_C = self.n_c
+
+    def hexagonal_lattice2(self, n_c, noise=0.0005):
+        """
+        Assemble a hexagonal lattice
+
+        :param n_c: Number of cells in lattice
+        :param noise: Noise added to cell locs (Gaussian SD)
+        :returns: X (n_c x 2) cell coordinates inside the 
+                    window (0 to 1, 0 to 1)
+        """
+        # Get # rows/cols of cells in square grid
+        rows = math.ceil(np.sqrt(n_c)) + 1
+
+        # Populate hexagonal grid
+        xx = np.linspace(0, 1, rows)
+        yy = np.linspace(0, np.sqrt(3)/2, rows)
+        X = np.empty((rows**2, 2), dtype=np.float32)
+        for i, x in enumerate(xx):
+            for j, y in enumerate(yy):
+                xy = np.array([x + (j%2) / (2 * (rows - 1)), y])
+                X[rows*i + j] = xy
+
+        # Restrict to n_c points within window
+        X = X[np.max(X, axis=1) < 1]
+        X = X[:n_c]
+        
+        # Add noise
+        X = np.array([np.random.normal(loc=x, scale=noise) for x in X])
+        
+        # Center points and apply periodic boundary
+        X = X - np.mean(X, axis=0) + 0.5
+        return np.mod(X, 1)
+    
+    def make_init2(self, L, n_c, noise=0.005):
+        """
+        Make initial condition. Currently, this is a hexagonal lattice + noise
+        Makes reference to the self.hexagonal_lattice function, then crops down to the reference frame
+        Stores:
+            self.n_c = number of cells
+            self.x0 = (nc x 2) matrix denoting cell coordinates
+            self.x = clone of self.x0
+        :param L: Domain size/length (np.float32)
+        :param noise: Gaussian noise added to {x,y} coordinates (np.float32)
+        """
+        self.L = L
+        self.x0 = L * self.hexagonal_lattice2(n_c, noise)
+        self.x = self.x0
+        self.generate_cells(self.x0.shape[0])
         self.n_C = self.n_c
 
     def make_init_boundary(self, L, r, noise=0.005):
@@ -1490,7 +1540,7 @@ class Tissue:
         return num_boundaries
         
     def animate(
-        self, file_name=None, dir_name="plots", n_frames=100, fps=15, print_updates=True
+        self, file_name=None, dir_name="plots", n_frames=100, fps=15, print_updates=True, inline=False, interval=200
     ):
         """
         Animate the simulation, saving to an mp4 file.
@@ -1522,17 +1572,21 @@ class Tissue:
             ax1.set(aspect=1, xlim=(0, self.L), ylim=(0, self.L))
             ax1.set_title(f"time = {self.t_span[skip * i]:.1f}")
 
-        Writer = animation.writers["ffmpeg"]
-        writer = Writer(fps=fps, bitrate=1800)
         if file_name is None:
             file_name = "animation_%d" % time.time()
-        an = animation.FuncAnimation(fig, anim, frames=n_frames)
-
+        an = animation.FuncAnimation(fig, anim, frames=n_frames, interval=interval)
+        
+        if inline:
+            return an
+        
         fname = "%s/%s.mp4" % (dir_name, file_name)
+        
         if print_updates:
             print(f"Saving to {fname}")
-
+        Writer = animation.writers["ffmpeg"]
+        writer = Writer(fps=fps, bitrate=1800)
         an.save(fname, writer=writer, dpi=264)
+
         plt.close()
 
     def normalize(self, x, xmin, xmax):
